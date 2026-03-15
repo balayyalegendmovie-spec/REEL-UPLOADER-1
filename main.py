@@ -58,6 +58,7 @@ class Config:
     # --- Credentials (from GitHub Secrets) ---
     IG_USERNAME      = os.environ.get("IG_USERNAME", "")
     IG_PASSWORD      = os.environ.get("IG_PASSWORD", "")
+    IG_SESSION       = os.environ.get("IG_SESSION", "")   # full contents of session.json
     GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "")
     GDRIVE_API_KEY   = os.environ.get("GDRIVE_API_KEY", "")
     GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
@@ -66,8 +67,7 @@ class Config:
     CLIP_LENGTH = 60            # seconds per reel
 
     # --- Upload timing ---
-    # ~2 hours between uploads with ±45s random variation
-    MAX_UPLOADS_PER_RUN = 3     # 3 uploads × ~2hr gap ≈ 5hr (within 6hr GitHub limit)
+    MAX_UPLOADS_PER_RUN = 3     # 3 uploads x ~2hr gap = ~5hr (within 6hr GitHub limit)
     DELAY_MIN = 7080            # 1 hour 58 minutes (seconds)
     DELAY_MAX = 7380            # 2 hours 3 minutes  (seconds)
 
@@ -83,7 +83,7 @@ class Config:
 
     VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm")
 
-    # --- Caption templates (rotated randomly) ---
+    # --- Caption templates ---
     CAPTIONS = [
         "🎬 {name} | Part {p}/{t}\n\n#movie #reels #viral #trending #fyp #cinema",
         "🔥 {name} — Part {p}/{t}\n\nFollow for next part! 🍿\n\n#movie #viral #reels",
@@ -92,16 +92,14 @@ class Config:
         "📽️ {name} • Part {p}/{t}\n\nStay tuned! 🔔\n\n#film #reels #viral #trending #fyp",
     ]
 
-    # --- Gemini models to try for frame selection (vision models, NOT image-gen) ---
-    # These models can analyze/understand images - used to pick best thumbnail frame
+    # --- Gemini vision models (pick best frame from grid) ---
     GEMINI_VISION_MODELS = [
         "gemini-2.0-flash",
         "gemini-1.5-flash",
         "gemini-1.5-pro",
     ]
 
-    # --- Gemini models to try for image generation (thumbnail background) ---
-    # NOTE: Image generation requires specific models. If none work, we use video frames.
+    # --- Gemini image generation models (AI background, optional) ---
     GEMINI_IMAGE_MODELS = [
         "gemini-2.0-flash-exp-image-generation",
         "imagen-3.0-generate-002",
@@ -112,8 +110,6 @@ class Config:
 #                      LOGGER
 # ============================================================
 class Logger:
-    """Dual logger → console + file with timestamps"""
-
     def __init__(self, filepath):
         self.filepath = filepath
 
@@ -160,7 +156,6 @@ log = Logger(Config.DETAIL_LOG)
 #                   HELPER FUNCTIONS
 # ============================================================
 def load_json(filepath, default=None):
-    """Safely load JSON file"""
     if default is None:
         default = {}
     try:
@@ -173,7 +168,6 @@ def load_json(filepath, default=None):
 
 
 def save_json(filepath, data):
-    """Safely save JSON file"""
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
@@ -182,14 +176,10 @@ def save_json(filepath, data):
 
 
 def movie_display_name(filename):
-    """Extract clean movie name from filename
-    'Inception (2010).mp4' → 'Inception (2010)'
-    """
     return Path(filename).stem
 
 
 def cleanup_temp():
-    """Remove temporary files to free disk space"""
     for path in [Config.MOVIE_FILE, Config.GEMINI_BG]:
         if os.path.exists(path):
             os.remove(path)
@@ -200,17 +190,13 @@ def cleanup_temp():
 
 
 def git_push():
-    """Commit and push progress files to GitHub"""
     try:
         os.system('git config user.name "Reel Bot"')
         os.system('git config user.email "bot@reelbot.com"')
-
-        # Stage only tracking files
         for f in [Config.LOG_FILE, Config.PROGRESS_FILE,
                   Config.SESSION_FILE, Config.DETAIL_LOG]:
             if os.path.exists(f):
                 os.system(f'git add "{f}"')
-
         os.system('git diff --staged --quiet || git commit -m "🤖 Auto: progress update"')
         os.system('git push')
         log.info("📁 Progress pushed to GitHub")
@@ -221,10 +207,37 @@ def git_push():
 # ============================================================
 #              SETUP VERIFICATION
 # ============================================================
-def verify_setup():
-    """Check all required secrets / credentials are set"""
-    critical_missing = []
+def write_session_from_secret():
+    """
+    If IG_SESSION GitHub Secret is set, write it to session.json on disk.
+    Called once at startup before instagram_login().
 
+    The secret value = full raw contents of session.json,
+    INCLUDING the opening { and closing } — paste it exactly as-is.
+    Secret name in GitHub: IG_SESSION
+    """
+    session_json = Config.IG_SESSION.strip()
+    if not session_json:
+        return  # no secret — will rely on a committed session.json file
+
+    # Validate it is real JSON before writing
+    try:
+        parsed = json.loads(session_json)
+    except json.JSONDecodeError as e:
+        log.error(f"IG_SESSION secret is not valid JSON: {e}")
+        log.error("Paste the FULL contents of session.json including {{ and }}")
+        return
+
+    try:
+        with open(Config.SESSION_FILE, "w", encoding="utf-8") as f:
+            json.dump(parsed, f, indent=4, ensure_ascii=False)
+        log.info("🔑 session.json written from IG_SESSION secret")
+    except IOError as e:
+        log.error(f"Failed to write session.json from secret: {e}")
+
+
+def verify_setup():
+    critical_missing = []
     if not Config.IG_USERNAME:
         critical_missing.append("IG_USERNAME")
     if not Config.IG_PASSWORD:
@@ -235,6 +248,9 @@ def verify_setup():
         critical_missing.append("GDRIVE_API_KEY")
     if not Config.GEMINI_API_KEY:
         log.warn("GEMINI_API_KEY not set → using video-frame thumbnails")
+    if not Config.IG_SESSION and not os.path.exists(Config.SESSION_FILE):
+        log.warn("IG_SESSION secret is empty and no session.json found — "
+                 "login will fail. Add IG_SESSION to GitHub Secrets.")
 
     if critical_missing:
         for m in critical_missing:
@@ -249,15 +265,10 @@ def verify_setup():
 #                 GOOGLE DRIVE MANAGER
 # ============================================================
 def list_drive_movies():
-    """
-    List all video files in the Google Drive folder.
-    Uses Drive API v3 with API key (folder must be shared publicly).
-    Handles pagination for large folders.
-    """
-    folder_id = Config.GDRIVE_FOLDER_ID
-    api_key   = Config.GDRIVE_API_KEY
-    url       = "https://www.googleapis.com/drive/v3/files"
-    all_files = []
+    folder_id  = Config.GDRIVE_FOLDER_ID
+    api_key    = Config.GDRIVE_API_KEY
+    url        = "https://www.googleapis.com/drive/v3/files"
+    all_files  = []
     page_token = None
 
     log.info(f"📂 Scanning Google Drive folder: {folder_id}")
@@ -275,7 +286,6 @@ def list_drive_movies():
 
         try:
             r = requests.get(url, params=params, timeout=30)
-
             if r.status_code == 403:
                 log.error("Drive API: Access denied. Check API key and folder sharing.")
                 return []
@@ -287,7 +297,6 @@ def list_drive_movies():
                 return []
 
             data = r.json()
-
             for f in data.get("files", []):
                 if any(f["name"].lower().endswith(ext) for ext in Config.VIDEO_EXTS):
                     all_files.append({
@@ -310,14 +319,13 @@ def list_drive_movies():
 
 
 def download_movie(file_id, output_path):
-    """Download a movie from Google Drive using gdown"""
     try:
         if os.path.exists(output_path):
             os.remove(output_path)
 
         log.info("📥 Downloading movie from Google Drive...")
-        download_url = f"https://drive.google.com/uc?id={file_id}"
-        gdown.download(download_url, output_path, quiet=False)
+        gdown.download(f"https://drive.google.com/uc?id={file_id}",
+                       output_path, quiet=False)
 
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
@@ -337,11 +345,9 @@ def download_movie(file_id, output_path):
 #                  VIDEO PROCESSOR
 # ============================================================
 def get_video_info(video_path):
-    """Get video duration and calculate total parts"""
     try:
         video = VideoFileClip(video_path)
         duration = video.duration
-        # Skip very short final clips (< 5 seconds)
         total_parts = 0
         for start in range(0, int(duration), Config.CLIP_LENGTH):
             end = min(start + Config.CLIP_LENGTH, duration)
@@ -355,7 +361,6 @@ def get_video_info(video_path):
 
 
 def extract_clip(video_path, part_num, output_path):
-    """Extract a single clip from the movie"""
     video = None
     clip  = None
     try:
@@ -368,13 +373,8 @@ def extract_clip(video_path, part_num, output_path):
             return False
 
         clip = video.subclip(start, end)
-        clip.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            threads=2,
-            logger=None,
-        )
+        clip.write_videofile(output_path, codec="libx264",
+                             audio_codec="aac", threads=2, logger=None)
         log.info(f"✂️ Part {part_num} extracted ({start}s → {end:.0f}s)")
         return True
 
@@ -391,14 +391,11 @@ def extract_clip(video_path, part_num, output_path):
 
 
 def extract_frame(video_path, time_sec):
-    """Extract a single frame from video as PIL Image"""
     video = None
     try:
-        video = VideoFileClip(video_path)
-        time_sec = min(time_sec, video.duration - 0.5)
-        time_sec = max(0, time_sec)
-        frame = video.get_frame(time_sec)
-        return Image.fromarray(frame)
+        video    = VideoFileClip(video_path)
+        time_sec = max(0, min(time_sec, video.duration - 0.5))
+        return Image.fromarray(video.get_frame(time_sec))
     except Exception as e:
         log.error(f"Frame extraction failed: {e}")
         return Image.new("RGB", (1920, 1080), (20, 20, 40))
@@ -409,55 +406,61 @@ def extract_frame(video_path, time_sec):
 
 
 def extract_frames_for_grid(video_path, frame_count=9):
-    """Extract evenly-spaced frames for the Gemini selection grid"""
-    video  = VideoFileClip(video_path)
+    """Extract evenly-spaced frames across the movie for the selection grid"""
+    video    = VideoFileClip(video_path)
     duration = video.duration
-    frames = []
+    frames   = []
     for i in range(frame_count):
-        t = duration * (0.15 + i * 0.07)   # spread from 15% → ~78% of movie
+        t = duration * (0.15 + i * 0.07)
         t = min(t, duration - 0.5)
-        frame = video.get_frame(t)
-        frames.append(Image.fromarray(frame))
+        frames.append(Image.fromarray(video.get_frame(t)))
     video.close()
     return frames
 
 
 def create_frame_grid(frames, tile_size=320):
-    """Arrange 9 frames into a 3×3 grid image"""
-    cols = 3
-    rows = 3
-    resized = [f.resize((tile_size, tile_size)) for f in frames]
-    grid = Image.new("RGB", (tile_size * cols, tile_size * rows))
-    for idx, img in enumerate(resized):
-        x = (idx % cols) * tile_size
-        y = (idx // cols) * tile_size
-        grid.paste(img, (x, y))
+    """Arrange 9 frames into a 3x3 grid"""
+    grid = Image.new("RGB", (tile_size * 3, tile_size * 3))
+    for idx, img in enumerate(frames):
+        x = (idx % 3) * tile_size
+        y = (idx // 3) * tile_size
+        grid.paste(img.resize((tile_size, tile_size)), (x, y))
     return grid
 
 
 # ============================================================
-#            GEMINI THUMBNAIL SELECTION  (vision)
+#         GEMINI VISION — pick best thumbnail frame
 # ============================================================
 def choose_best_frame_with_gemini(grid_image, frames):
     """
-    Ask a Gemini vision model to pick the best thumbnail frame
-    from the 3×3 grid. Falls back to the middle frame on any error.
+    Send the 3x3 frame grid to Gemini vision and ask it to
+    pick the most attractive thumbnail frame (1-9).
+
+    IMPORTANT: Uses the correct google-genai SDK v1+ format:
+      - genai_types.Part.from_bytes(data=..., mime_type=...)
+      - genai_types.Part.from_text(text=...)
+    NOT raw dicts — those cause pydantic validation errors.
     """
     if not GEMINI_AVAILABLE or not Config.GEMINI_API_KEY:
         log.warn("Gemini not available → using middle frame")
         return frames[4]
 
-    prompt = (
+    # Convert grid image to JPEG bytes
+    buf = BytesIO()
+    grid_image.save(buf, format="JPEG", quality=85)
+    image_bytes = buf.getvalue()
+
+    prompt_text = (
         "You are selecting the best movie thumbnail frame.\n"
-        "The image shows a 3×3 grid of frames numbered:\n"
+        "The image shows a 3x3 grid of frames numbered:\n"
         "  1 2 3\n"
         "  4 5 6\n"
         "  7 8 9\n\n"
-        "Choose the frame that:\n"
-        "- Has interesting characters or action\n"
+        "Pick the frame that:\n"
+        "- Has the most interesting characters or action\n"
         "- Is bright and clearly visible\n"
         "- Would attract the most viewers as a thumbnail\n\n"
-        "Reply with ONLY a single digit (1-9). No other text."
+        "Reply with ONLY a single digit 1 through 9. Nothing else."
     )
 
     try:
@@ -466,30 +469,31 @@ def choose_best_frame_with_gemini(grid_image, frames):
         log.warn(f"Gemini client init failed: {e} → using middle frame")
         return frames[4]
 
-    # Save grid to bytes
-    buf = BytesIO()
-    grid_image.save(buf, format="JPEG", quality=85)
-    image_bytes = buf.getvalue()
-
     for model_name in Config.GEMINI_VISION_MODELS:
         try:
             log.info(f"🤖 Asking Gemini ({model_name}) to pick best frame...")
+
+            # ✅ CORRECT FORMAT for google-genai SDK v1+
+            # Use Part.from_bytes() and Part.from_text() — NOT raw dicts
+            image_part = genai_types.Part.from_bytes(
+                data=image_bytes,
+                mime_type="image/jpeg",
+            )
+            text_part = genai_types.Part.from_text(text=prompt_text)
+
             response = client.models.generate_content(
                 model=model_name,
-                contents=[
-                    {"mime_type": "image/jpeg", "data": image_bytes},
-                    prompt,
-                ],
+                contents=[image_part, text_part],
             )
-            raw = response.text.strip()
-            # Extract first digit found in the response
+
+            raw   = response.text.strip()
             digit = next((c for c in raw if c.isdigit() and c != "0"), None)
             if digit and 1 <= int(digit) <= 9:
                 chosen = int(digit)
                 log.info(f"🤖 Gemini picked frame #{chosen}")
                 return frames[chosen - 1]
             else:
-                log.warn(f"Gemini returned unexpected text: '{raw}' → trying next model")
+                log.warn(f"Gemini returned unexpected: '{raw}' → trying next model")
 
         except Exception as e:
             log.warn(f"Gemini vision model {model_name} failed: {e}")
@@ -500,21 +504,21 @@ def choose_best_frame_with_gemini(grid_image, frames):
 
 
 # ============================================================
-#          GEMINI IMAGE GENERATION (optional background)
+#       GEMINI IMAGE GENERATION — optional AI background
 # ============================================================
 def generate_gemini_background(movie_name):
     """
-    Try to generate a cinematic AI background image with Gemini.
-    Returns PIL Image or None (falls back to video frame if it fails).
+    Try Gemini image generation for a cinematic poster background.
+    Returns PIL Image or None (gracefully falls back).
+    Requires a Gemini API key with image generation enabled.
     """
     if not GEMINI_AVAILABLE or not Config.GEMINI_API_KEY:
         return None
 
     prompt = (
         f"Cinematic movie poster background for '{movie_name}'. "
-        "Dark moody atmosphere, dramatic lighting, professional quality, "
-        "visually striking social media thumbnail. "
-        "NO text, NO letters, NO words anywhere in the image."
+        "Dark moody atmosphere, dramatic lighting, professional quality. "
+        "NO text, NO letters, NO words in the image."
     )
 
     try:
@@ -526,7 +530,6 @@ def generate_gemini_background(movie_name):
     for model_name in Config.GEMINI_IMAGE_MODELS:
         try:
             log.info(f"🎨 Trying Gemini image generation ({model_name})...")
-
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -534,21 +537,19 @@ def generate_gemini_background(movie_name):
                     response_modalities=["IMAGE", "TEXT"]
                 ),
             )
-
             if response.candidates:
                 for part in response.candidates[0].content.parts:
                     if hasattr(part, "inline_data") and part.inline_data is not None:
                         image = Image.open(BytesIO(part.inline_data.data))
-                        log.info(f"🎨 Gemini image generated with {model_name}!")
+                        log.info(f"🎨 AI background generated with {model_name}!")
                         return image
-
             log.warn(f"{model_name}: no image in response → trying next")
 
         except Exception as e:
             log.warn(f"Gemini image model {model_name} failed: {e}")
             continue
 
-    log.warn("All Gemini image models failed → will use best video frame as background")
+    log.warn("All Gemini image models failed → using best video frame as background")
     return None
 
 
@@ -556,7 +557,6 @@ def generate_gemini_background(movie_name):
 #            THUMBNAIL COMPOSER  (Pillow)
 # ============================================================
 def get_font(size):
-    """Load a bold font with multiple fallback paths"""
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -575,39 +575,27 @@ def get_font(size):
 
 def create_thumbnail(bg_image, movie_name, part_num, total_parts,
                      movie_num, total_movies, output_path):
-    """
-    Compose a professional 1080×1920 thumbnail:
-      - Background image (AI-generated or best video frame)
-      - Dark gradient overlays top & bottom
-      - Movie title (top, white)
-      - Part number (bottom, gold)
-      - Movie counter (grey, below part number)
-      - Gold decorative line
-    """
     try:
-        # Resize to Instagram Reel cover ratio (9:16)
         thumb = bg_image.copy().resize((1080, 1920), Image.LANCZOS).convert("RGBA")
 
-        # Dark gradient overlays
+        # Gradient overlays (top + bottom)
         overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
         odraw   = ImageDraw.Draw(overlay)
-
-        for y in range(500):                  # top fade
+        for y in range(500):
             alpha = int(220 * (1 - y / 500))
             odraw.rectangle([(0, y), (1080, y + 1)], fill=(0, 0, 0, alpha))
-        for y in range(1420, 1920):           # bottom fade
+        for y in range(1420, 1920):
             alpha = int(220 * ((y - 1420) / 500))
             odraw.rectangle([(0, y), (1080, y + 1)], fill=(0, 0, 0, alpha))
 
         thumb = Image.alpha_composite(thumb, overlay).convert("RGB")
         draw  = ImageDraw.Draw(thumb)
 
-        # Fonts
         font_title = get_font(68)
         font_part  = get_font(56)
         font_info  = get_font(36)
 
-        # --- Movie title (top, word-wrapped) ---
+        # Movie title top (word-wrapped)
         title     = movie_name.upper()
         max_chars = 18
         if len(title) > max_chars:
@@ -629,31 +617,30 @@ def create_thumbnail(bg_image, movie_name, part_num, total_parts,
             bbox = draw.textbbox((0, 0), line, font=font_title)
             tw   = bbox[2] - bbox[0]
             x    = (1080 - tw) // 2
-            for dx in range(-3, 4):           # black outline
+            for dx in range(-3, 4):
                 for dy in range(-3, 4):
                     draw.text((x + dx, y_cur + dy), line, font=font_title, fill="black")
             draw.text((x, y_cur), line, font=font_title, fill="white")
             y_cur += bbox[3] - bbox[1] + 15
 
-        # --- Part number (gold, bottom) ---
+        # Part number (gold, bottom)
         part_text = f"PART {part_num} / {total_parts}"
         bbox = draw.textbbox((0, 0), part_text, font=font_part)
         tw   = bbox[2] - bbox[0]
         x    = (1080 - tw) // 2
-        y    = 1740
         for dx in range(-2, 3):
             for dy in range(-2, 3):
-                draw.text((x + dx, y + dy), part_text, font=font_part, fill="black")
-        draw.text((x, y), part_text, font=font_part, fill=(255, 215, 0))
+                draw.text((x + dx, 1740 + dy), part_text, font=font_part, fill="black")
+        draw.text((x, 1740), part_text, font=font_part, fill=(255, 215, 0))
 
-        # --- Movie counter (grey) ---
+        # Movie counter (grey)
         counter_text = f"Movie {movie_num} of {total_movies}"
         bbox = draw.textbbox((0, 0), counter_text, font=font_info)
         tw   = bbox[2] - bbox[0]
-        x    = (1080 - tw) // 2
-        draw.text((x, 1810), counter_text, font=font_info, fill=(180, 180, 180))
+        draw.text(((1080 - tw) // 2, 1810), counter_text,
+                  font=font_info, fill=(180, 180, 180))
 
-        # --- Gold decorative line ---
+        # Gold decorative line
         draw.rectangle([(200, 1720), (880, 1723)], fill=(255, 215, 0))
 
         thumb.save(output_path, "JPEG", quality=95)
@@ -663,12 +650,11 @@ def create_thumbnail(bg_image, movie_name, part_num, total_parts,
     except Exception as e:
         log.error(f"Thumbnail creation failed: {e}")
         log.error(traceback.format_exc())
-        # Last-resort fallback: plain dark image
         try:
             fb  = Image.new("RGB", (1080, 1920), (20, 20, 40))
             d   = ImageDraw.Draw(fb)
             fnt = get_font(60)
-            d.text((100, 800), movie_name,                    font=fnt, fill="white")
+            d.text((100, 800), movie_name,                       font=fnt, fill="white")
             d.text((100, 900), f"Part {part_num}/{total_parts}", font=fnt, fill=(255, 215, 0))
             fb.save(output_path, "JPEG")
             return True
@@ -681,73 +667,62 @@ def create_thumbnail(bg_image, movie_name, part_num, total_parts,
 # ============================================================
 def instagram_login():
     """
-    Login to Instagram with session reuse and exponential-backoff retry.
-    Prints a helpful hint when the account cannot be found.
+    Login using a pre-generated session.json ONLY.
+
+    Why: Instagram flags fresh logins from GitHub Actions servers as
+    suspicious (different IP every run) → sends OTP, locks account.
+
+    Solution: Generate session.json ONCE on your local PC using
+    generate_session.py, then commit it to the repo. GitHub Actions
+    reuses the session without triggering security checks.
     """
+    if not os.path.exists(Config.SESSION_FILE):
+        log.error("❌ session.json not found!")
+        log.error(
+            "\n"
+            "=========================================================\n"
+            "  ACTION REQUIRED: Generate session.json on your local PC\n"
+            "=========================================================\n"
+            "  1. Run:   python generate_session.py\n"
+            "  2. Login with your Instagram username + password\n"
+            "  3. Complete any OTP/challenge Instagram sends\n"
+            "  4. Commit the generated session.json to your GitHub repo\n"
+            "  5. Re-run the workflow\n"
+            "=========================================================\n"
+        )
+        return None
+
     for attempt in range(1, 4):
         try:
+            log.info(f"🔐 Login attempt {attempt}/3 using saved session...")
             cl = Client()
             cl.delay_range = [2, 5]
+            cl.load_settings(Config.SESSION_FILE)
+            cl.login(Config.IG_USERNAME, Config.IG_PASSWORD)
+            cl.get_timeline_feed()    # verify session is alive
+            cl.dump_settings(Config.SESSION_FILE)  # refresh + save
+            log.info("🔐 Logged in via session ✅")
+            return cl
 
-            # ---- Try saved session first ----
-            if os.path.exists(Config.SESSION_FILE):
-                log.info(f"🔐 Login attempt {attempt} (using saved session)...")
-                try:
-                    cl.load_settings(Config.SESSION_FILE)
-                    cl.login(Config.IG_USERNAME, Config.IG_PASSWORD)
-                    cl.get_timeline_feed()          # verify session is alive
-                    log.info("🔐 Logged in via saved session")
-                    return cl
-                except (LoginRequired, ChallengeRequired, Exception):
-                    log.warn("Saved session invalid → deleting and doing fresh login")
-                    os.remove(Config.SESSION_FILE)
-
-            # ---- Fresh login ----
-            log.info(f"🔐 Fresh login (attempt {attempt}/3)...")
-            cl2 = Client()
-            cl2.delay_range = [2, 5]
-            cl2.login(Config.IG_USERNAME, Config.IG_PASSWORD)
-            cl2.dump_settings(Config.SESSION_FILE)
-            log.info("🔐 Fresh login successful!")
-            return cl2
+        except ChallengeRequired:
+            log.error("⛔ Instagram challenge required.")
+            log.error("Run generate_session.py on your local PC again, "
+                      "complete the challenge, then re-commit session.json")
+            return None
 
         except Exception as e:
-            err_msg = str(e)
-            log.error(f"Login failed (attempt {attempt}): {err_msg}")
-
-            # Human-readable hints for common errors
-            if "We can't find an account" in err_msg or "not found" in err_msg.lower():
-                log.error(
-                    "💡 HINT: Instagram says the account doesn't exist.\n"
-                    "   Please double-check these GitHub Secrets:\n"
-                    "   • IG_USERNAME  — must be your Instagram username (no @)\n"
-                    "   • IG_PASSWORD  — must be your exact Instagram password\n"
-                    "   Try logging in manually at instagram.com to confirm they work."
-                )
-            elif "challenge" in err_msg.lower():
-                log.error("💡 HINT: Instagram sent a security challenge. "
-                          "Log in manually from a browser and approve it, then retry.")
-            elif "bad_password" in err_msg.lower() or "password" in err_msg.lower():
-                log.error("💡 HINT: Wrong password. Update the IG_PASSWORD secret.")
-
-            # Delete any corrupted session
-            if os.path.exists(Config.SESSION_FILE):
-                os.remove(Config.SESSION_FILE)
-
+            log.warn(f"Session login attempt {attempt} failed: {e}")
             if attempt < 3:
-                wait = 120 * attempt
-                log.info(f"⏳ Waiting {wait}s before retry...")
-                time.sleep(wait)
+                time.sleep(30 * attempt)
 
-    log.error("🔐 All login attempts failed! Fix IG_USERNAME / IG_PASSWORD secrets.")
+    log.error("All session login attempts failed.")
+    log.error("Delete session.json, run generate_session.py locally, "
+              "then re-commit.")
     return None
 
 
 def upload_reel(cl, video_path, thumbnail_path, caption):
-    """
-    Upload a single reel with comprehensive error handling.
-    Returns: True (success) | False (failed, retry next run) | "STOP" (fatal)
-    """
+    """Upload a single reel. Returns True / False / 'STOP'"""
     for retry in range(1, 4):
         try:
             log.info(f"  📤 Upload attempt {retry}/3...")
@@ -769,15 +744,14 @@ def upload_reel(cl, video_path, thumbnail_path, caption):
 
         except FeedbackRequired as e:
             log.error(f"Instagram feedback required: {e}")
-            log.error("⛔ Account may be flagged. Stopping all uploads.")
             return "STOP"
 
         except ChallengeRequired:
-            log.error("⛔ Instagram challenge required. Manual action needed.")
+            log.error("⛔ Instagram challenge. Regenerate session.json locally.")
             return "STOP"
 
         except LoginRequired:
-            log.warn("Session expired mid-upload → re-logging...")
+            log.warn("Session expired mid-upload → attempting re-login...")
             try:
                 cl.login(Config.IG_USERNAME, Config.IG_PASSWORD)
                 cl.dump_settings(Config.SESSION_FILE)
@@ -795,9 +769,7 @@ def upload_reel(cl, video_path, thumbnail_path, caption):
             log.error(f"Upload error (attempt {retry}): {e}")
             log.error(traceback.format_exc())
             if retry < 3:
-                wait = 300 * retry
-                log.info(f"⏳ Waiting {wait // 60}m before retry...")
-                time.sleep(wait)
+                time.sleep(300 * retry)
 
     return False
 
@@ -806,18 +778,12 @@ def upload_reel(cl, video_path, thumbnail_path, caption):
 #                   SMART DELAY
 # ============================================================
 def smart_delay(upload_number):
-    """
-    Wait ~2 hours ± small jitter so uploads look natural.
-    Logs remaining time every 10 minutes.
-    """
-    base  = random.randint(Config.DELAY_MIN, Config.DELAY_MAX)
+    base   = random.randint(Config.DELAY_MIN, Config.DELAY_MAX)
     jitter = random.randint(-45, 45)
     total  = max(60, base + jitter)
 
-    mins = total // 60
-    secs = total % 60
     next_time = datetime.now() + timedelta(seconds=total)
-    log.info(f"⏳ Delay: {mins}m {secs}s  "
+    log.info(f"⏳ Delay: {total // 60}m {total % 60}s  "
              f"(next upload ≈ {next_time.strftime('%H:%M:%S')})")
 
     elapsed = 0
@@ -854,7 +820,7 @@ def save_movies_log(data):
     data["total_completed"] = sum(
         1 for m in data["movies"].values() if m["status"] == "completed"
     )
-    data["total_movies_found"] = len(data["movies"])
+    data["total_movies_found"]   = len(data["movies"])
     data["total_reels_uploaded"] = sum(
         m.get("uploaded_parts", 0) for m in data["movies"].values()
     )
@@ -862,21 +828,20 @@ def save_movies_log(data):
 
 
 def sync_with_drive(movies_log, drive_files):
-    """Sync tracking log with what's in Drive (non-destructive)"""
     added = 0
     for f in drive_files:
         name = f["name"]
         if name not in movies_log["movies"]:
             movies_log["movies"][name] = {
-                "drive_id":        f["id"],
-                "status":          "pending",
-                "total_parts":     0,
-                "uploaded_parts":  0,
-                "size_mb":         round(f["size"] / (1024 * 1024), 1),
-                "started_at":      "",
-                "completed_at":    "",
+                "drive_id":         f["id"],
+                "status":           "pending",
+                "total_parts":      0,
+                "uploaded_parts":   0,
+                "size_mb":          round(f["size"] / (1024 * 1024), 1),
+                "started_at":       "",
+                "completed_at":     "",
                 "last_uploaded_at": "",
-                "errors":          0,
+                "errors":           0,
             }
             log.info(f"🆕 New movie detected: {name}")
             added += 1
@@ -886,12 +851,6 @@ def sync_with_drive(movies_log, drive_files):
 
 
 def get_next_movie(movies_log):
-    """
-    Pick the next movie:
-    1. Resume any 'in_progress' movie first
-    2. Then the first 'pending' movie
-    3. None if everything is done
-    """
     for name, info in movies_log["movies"].items():
         if info["status"] == "in_progress":
             log.info(f"▶️ Resuming: {name}")
@@ -905,9 +864,7 @@ def get_next_movie(movies_log):
 
 def load_progress():
     return load_json(Config.PROGRESS_FILE, {
-        "movie_name":    "",
-        "last_uploaded": 0,
-        "total_parts":   0,
+        "movie_name": "", "last_uploaded": 0, "total_parts": 0,
     })
 
 
@@ -919,16 +876,13 @@ def save_progress(data):
 #                    SUMMARY REPORT
 # ============================================================
 def print_summary(movies_log):
-    """Print a formatted status table for all movies"""
     log.separator("=")
     print("📊 MOVIES STATUS REPORT")
     log.separator("-")
 
     status_emoji = {
-        "pending":     "⏳",
-        "in_progress": "🔄",
-        "completed":   "✅",
-        "error":       "❌",
+        "pending": "⏳", "in_progress": "🔄",
+        "completed": "✅", "error": "❌",
     }
 
     for idx, (name, info) in enumerate(movies_log["movies"].items(), 1):
@@ -936,7 +890,6 @@ def print_summary(movies_log):
         display = movie_display_name(name)
         parts   = f"{info.get('uploaded_parts', 0)}/{info.get('total_parts', '?')}"
         size    = f"{info.get('size_mb', '?')} MB"
-
         print(f"  {emoji} #{idx} {display}")
         print(f"      Status: {info['status']} | Parts: {parts} | Size: {size}")
         if info.get("started_at"):
@@ -951,9 +904,9 @@ def print_summary(movies_log):
     total = len(movies_log["movies"])
     done  = movies_log.get("total_completed", 0)
     reels = movies_log.get("total_reels_uploaded", 0)
-    print(f"  📈 Movies:        {done}/{total} completed")
+    print(f"  📈 Movies:         {done}/{total} completed")
     print(f"  📤 Reels uploaded: {reels}")
-    print(f"  🕐 Last run:      {movies_log.get('last_run', 'N/A')}")
+    print(f"  🕐 Last run:       {movies_log.get('last_run', 'N/A')}")
     log.separator("=")
 
 
@@ -966,27 +919,25 @@ def main():
     print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     log.separator("=")
 
-    # ── 1. Verify setup ──────────────────────────────────────
+    # Write session.json from IG_SESSION GitHub Secret (if set)
+    write_session_from_secret()
+
     if not verify_setup():
         log.error("Setup verification failed. Add missing secrets!")
         return
 
-    # ── 2. Scan Google Drive ─────────────────────────────────
     drive_files = list_drive_movies()
     if not drive_files:
         log.error("No video files found in Google Drive folder!")
-        log.info("Make sure the folder is publicly shared and contains .mp4 files")
         return
 
-    # ── 3. Load & sync movie tracker ─────────────────────────
     movies_log = load_movies_log()
     movies_log = sync_with_drive(movies_log, drive_files)
     save_movies_log(movies_log)
 
-    # ── 4. Get next movie ────────────────────────────────────
     movie_name, movie_info = get_next_movie(movies_log)
     if not movie_name:
-        log.info("🎉 ALL MOVIES HAVE BEEN UPLOADED! Nothing to do.")
+        log.info("🎉 ALL MOVIES UPLOADED! Nothing to do.")
         print_summary(movies_log)
         return
 
@@ -994,7 +945,6 @@ def main():
     log.info(f"🎬 Current movie: {display_name}")
     log.info(f"📌 Status: {movie_info['status']}")
 
-    # ── 5. Download movie ────────────────────────────────────
     if not download_movie(movie_info["drive_id"], Config.MOVIE_FILE):
         log.error(f"Failed to download '{display_name}'. Will retry next run.")
         movie_info["errors"] = movie_info.get("errors", 0) + 1
@@ -1002,7 +952,6 @@ def main():
         git_push()
         return
 
-    # ── 6. Get video info ────────────────────────────────────
     duration, total_parts = get_video_info(Config.MOVIE_FILE)
     if total_parts == 0:
         log.error(f"Could not read video '{display_name}'. Marking as error.")
@@ -1012,35 +961,23 @@ def main():
         return
 
     movie_info["total_parts"] = total_parts
-    mins = int(duration) // 60
-    secs = int(duration) % 60
-    log.info(f"📏 Duration: {mins}m {secs}s → {total_parts} parts")
+    log.info(f"📏 Duration: {int(duration) // 60}m {int(duration) % 60}s "
+             f"→ {total_parts} parts")
 
-    # ── 7. Mark as in_progress ───────────────────────────────
     if movie_info["status"] == "pending":
         movie_info["status"]     = "in_progress"
         movie_info["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     movies_log["current_movie"] = movie_name
     save_movies_log(movies_log)
 
-    # ── 8. Load upload progress ──────────────────────────────
     progress = load_progress()
     if progress.get("movie_name") != movie_name:
-        progress = {
-            "movie_name":    movie_name,
-            "last_uploaded": 0,
-            "total_parts":   total_parts,
-        }
+        progress = {"movie_name": movie_name,
+                    "last_uploaded": 0, "total_parts": total_parts}
     last_uploaded = progress["last_uploaded"]
     log.info(f"📊 Upload progress: {last_uploaded}/{total_parts}")
 
-    # ── 9. Pick best thumbnail background ───────────────────
-    # Strategy:
-    #   a) Try to use a cached background from previous run
-    #   b) Otherwise try Gemini image generation
-    #   c) Otherwise ask Gemini vision to pick the best video frame
-    #   d) Last resort: use the middle frame
+    # ── Pick thumbnail background ────────────────────────────
     gemini_bg = None
 
     if os.path.exists(Config.GEMINI_BG):
@@ -1051,33 +988,29 @@ def main():
             gemini_bg = None
 
     if gemini_bg is None:
-        # Try AI image generation first
         gemini_bg = generate_gemini_background(display_name)
 
         if gemini_bg is None:
-            # Fall back to best-frame selection via Gemini vision
             log.info("🎬 Extracting frames for Gemini thumbnail selection...")
-            frames = extract_frames_for_grid(Config.MOVIE_FILE)
-            grid   = create_frame_grid(frames)
+            frames    = extract_frames_for_grid(Config.MOVIE_FILE)
+            grid      = create_frame_grid(frames)
             gemini_bg = choose_best_frame_with_gemini(grid, frames)
 
-        # Cache for subsequent parts
         try:
             gemini_bg.save(Config.GEMINI_BG)
             log.info("💾 Thumbnail background cached")
         except Exception as e:
             log.warn(f"Could not cache background: {e}")
 
-    # ── 10. Login to Instagram ───────────────────────────────
+    # ── Login ────────────────────────────────────────────────
     cl = instagram_login()
     if cl is None:
-        log.error("Cannot login to Instagram. Stopping.")
+        log.error("Cannot login. Generate session.json locally and commit it!")
         save_progress(progress)
         save_movies_log(movies_log)
         git_push()
         return
 
-    # ── 11. Create working directories ───────────────────────
     os.makedirs(Config.REELS_DIR,  exist_ok=True)
     os.makedirs(Config.THUMBS_DIR, exist_ok=True)
 
@@ -1085,7 +1018,7 @@ def main():
     movie_num    = movie_names.index(movie_name) + 1
     total_movies = len(movie_names)
 
-    # ── 12. Upload loop ──────────────────────────────────────
+    # ── Upload loop ──────────────────────────────────────────
     uploaded_this_run = 0
     stop_uploading    = False
 
@@ -1093,24 +1026,21 @@ def main():
 
         if stop_uploading:
             break
-
         if uploaded_this_run >= Config.MAX_UPLOADS_PER_RUN:
-            log.info(f"🛑 Run limit reached ({Config.MAX_UPLOADS_PER_RUN} uploads). "
-                     "Will continue next scheduled run.")
+            log.info(f"🛑 Run limit ({Config.MAX_UPLOADS_PER_RUN}) reached. "
+                     "Continuing next scheduled run.")
             break
 
         log.separator("-")
-        log.info(f"📦 Processing Part {part_num}/{total_parts} of '{display_name}'")
+        log.info(f"📦 Processing Part {part_num}/{total_parts} — '{display_name}'")
 
-        # Extract clip
         clip_path = os.path.join(Config.REELS_DIR, f"part_{part_num}.mp4")
         if not extract_clip(Config.MOVIE_FILE, part_num, clip_path):
-            log.warn(f"Skipping part {part_num} (extraction failed)")
+            log.warn(f"Skipping part {part_num}")
             progress["last_uploaded"] = part_num
             save_progress(progress)
             continue
 
-        # Create thumbnail
         thumb_path = os.path.join(Config.THUMBS_DIR, f"thumb_{part_num}.jpg")
         if gemini_bg:
             bg_image = gemini_bg.copy()
@@ -1119,34 +1049,28 @@ def main():
             mid_time = min(mid_time, duration - 1)
             bg_image = extract_frame(Config.MOVIE_FILE, mid_time)
 
-        create_thumbnail(
-            bg_image, display_name, part_num, total_parts,
-            movie_num, total_movies, thumb_path
-        )
+        create_thumbnail(bg_image, display_name, part_num, total_parts,
+                         movie_num, total_movies, thumb_path)
 
-        # Build caption
         caption = random.choice(Config.CAPTIONS).format(
             name=display_name, p=part_num, t=total_parts
         )
 
-        # Upload
         log.info(f"📤 Uploading Part {part_num}/{total_parts}...")
         result = upload_reel(cl, clip_path, thumb_path, caption)
 
         if result == "STOP":
-            log.error("⛔ Fatal Instagram error → stopping all uploads")
+            log.error("⛔ Fatal Instagram error → stopping")
             log.upload(display_name, part_num, total_parts, "FATAL_STOP")
             stop_uploading = True
 
         elif result is True:
-            log.info(f"✅ Part {part_num}/{total_parts} uploaded successfully!")
+            log.info(f"✅ Part {part_num}/{total_parts} uploaded!")
             log.upload(display_name, part_num, total_parts, "SUCCESS")
-
-            uploaded_this_run              += 1
-            progress["last_uploaded"]       = part_num
-            movie_info["uploaded_parts"]    = part_num
-            movie_info["last_uploaded_at"]  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+            uploaded_this_run             += 1
+            progress["last_uploaded"]      = part_num
+            movie_info["uploaded_parts"]   = part_num
+            movie_info["last_uploaded_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             save_progress(progress)
             save_movies_log(movies_log)
             git_push()
@@ -1155,49 +1079,38 @@ def main():
             log.error(f"❌ Part {part_num} failed after all retries")
             log.upload(display_name, part_num, total_parts, "FAILED")
             movie_info["errors"] = movie_info.get("errors", 0) + 1
-
             save_progress(progress)
             save_movies_log(movies_log)
             git_push()
-
             log.info("⏳ Waiting 10 minutes before continuing...")
             time.sleep(600)
             continue
 
-        # Cleanup clip & thumbnail to save disk space
         for f in [clip_path, thumb_path]:
             if os.path.exists(f):
                 try: os.remove(f)
                 except: pass
 
-        # Smart delay before next upload (skip after the last upload of the run)
         if (uploaded_this_run < Config.MAX_UPLOADS_PER_RUN
                 and part_num < total_parts
                 and not stop_uploading):
             smart_delay(uploaded_this_run)
 
-    # ── 13. Check if movie is complete ───────────────────────
     if progress["last_uploaded"] >= total_parts:
         log.separator("*")
         log.info(f"🎉🎉🎉 Movie '{display_name}' FULLY UPLOADED! 🎉🎉🎉")
         log.separator("*")
-
         movie_info["status"]         = "completed"
         movie_info["uploaded_parts"] = total_parts
         movie_info["completed_at"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         movies_log["current_movie"]  = ""
-
         progress = {"movie_name": "", "last_uploaded": 0, "total_parts": 0}
         cleanup_temp()
 
-    # ── 14. Final save ───────────────────────────────────────
     save_progress(progress)
     save_movies_log(movies_log)
     git_push()
-
-    # ── 15. Summary ──────────────────────────────────────────
     print_summary(movies_log)
-
     log.separator("=")
     log.info(f"✅ Run complete! Uploaded {uploaded_this_run} reels this run.")
     log.separator("=")
