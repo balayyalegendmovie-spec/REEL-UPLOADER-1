@@ -1,21 +1,39 @@
 """
 ============================================================
-🎬 FULLY AUTOMATED MULTI-MOVIE INSTAGRAM REEL UPLOADER
+🎬 FULLY AUTOMATED MULTI-MOVIE INSTAGRAM + YOUTUBE UPLOADER
 ============================================================
 FLOW (printed live while running):
-  STARTUP   → write session from secret → verify credentials
-  DRIVE     → scan folder → find new movies → pick next one
-  DOWNLOAD  → download movie from Google Drive
-  VIDEO     → ffprobe duration → calculate parts count
-  THUMBNAIL → extract 9 frames (ffmpeg) → Gemini picks best
-  LOGIN     → Instagram session login (no fresh login = no OTP)
-  UPLOAD    → for each part: cut clip → make thumbnail → upload
-  DELAY     → wait ~2hrs between uploads (natural pattern)
-  DONE      → save progress → push to GitHub → print summary
+  STARTUP    → write sessions from secrets → verify credentials
+  DRIVE      → scan folder → sort episodes correctly (1,2,3...52)
+  DOWNLOAD   → download current episode/movie from Google Drive
+  VIDEO      → ffprobe duration → calculate 59s parts count
+  THUMBNAIL  → extract 9 frames (ffmpeg) → Gemini picks best
+  LOGIN      → Instagram session + YouTube OAuth token (no OTP)
+  UPLOAD     → cut clip → make thumbnail
+               → upload to Instagram Reels
+               → upload to YouTube Shorts
+  DONE       → save progress → push to GitHub → print summary
+
+SUPPORTS ALL FILENAME FORMATS:
+  Doraemon_S16_–_Episode_1_–_A_story_of_...mkv   → "Doraemon S16 Ep.1"
+  Doraemon_S16_–_Episode_52_–_Some_name.mkv       → "Doraemon S16 Ep.52"
+  Inception_2010_Part1.mp4                         → "Inception 2010"
+  Avatar_Full_Movie.mp4                            → "Avatar Full Movie"
+
+EPISODE SORT ORDER:
+  Drive API sorts alphabetically (Episode_10 before Episode_2).
+  This code sorts by Season + Episode NUMBER so order is always correct.
+
+SESSIONS / TOKENS (generate locally once, store as GitHub Secrets):
+  IG_SESSION       → full contents of session.json  (Instagram)
+  YT_TOKEN         → full contents of yt_token.json (YouTube OAuth2)
+  YT_CLIENT_ID     → from Google Cloud Console OAuth2 credentials
+  YT_CLIENT_SECRET → from Google Cloud Console OAuth2 credentials
 ============================================================
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -28,32 +46,29 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime, timedelta
 
-# Flush stdout immediately so GitHub Actions shows output in real-time
-# Without this, output can be buffered and appear all at once at the end
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 def flush_print(msg=""):
-    """Print and immediately flush so GitHub Actions shows it live."""
     print(msg, flush=True)
 
-
-# Image / Thumbnail
 from PIL import Image, ImageDraw, ImageFont
-
-# Instagram
 from instagrapi import Client
 from instagrapi.exceptions import (
-    LoginRequired,
-    ChallengeRequired,
-    FeedbackRequired,
-    PleaseWaitFewMinutes,
-    ClientThrottledError,
+    LoginRequired, ChallengeRequired, FeedbackRequired,
+    PleaseWaitFewMinutes, ClientThrottledError,
 )
-
-# Google Drive download
 import gdown
 
-# Gemini AI for thumbnails
+YT_AVAILABLE = False
+try:
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from googleapiclient.discovery import build as yt_build
+    from googleapiclient.http import MediaFileUpload
+    YT_AVAILABLE = True
+except ImportError:
+    flush_print("⚠️ google-api-python-client not installed → YouTube disabled")
+
 GEMINI_AVAILABLE = False
 try:
     from google import genai
@@ -67,66 +82,67 @@ except ImportError:
 #                    CONFIGURATION
 # ============================================================
 class Config:
-    # ── Credentials from GitHub Secrets ──────────────────────
     IG_USERNAME      = os.environ.get("IG_USERNAME", "")
     IG_PASSWORD      = os.environ.get("IG_PASSWORD", "")
-    # IG_SESSION: paste the FULL contents of session.json here
-    # (everything including the opening { and closing })
     IG_SESSION       = os.environ.get("IG_SESSION", "")
+    YT_TOKEN         = os.environ.get("YT_TOKEN", "")
+    YT_CLIENT_ID     = os.environ.get("YT_CLIENT_ID", "")
+    YT_CLIENT_SECRET = os.environ.get("YT_CLIENT_SECRET", "")
     GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "")
     GDRIVE_API_KEY   = os.environ.get("GDRIVE_API_KEY", "")
     GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
 
-    # ── Video settings ────────────────────────────────────────
-    CLIP_LENGTH = 60            # seconds per reel (Instagram max = 90s)
+    # 59s so clips qualify as YouTube Shorts (≤60s) AND Instagram Reels
+    CLIP_LENGTH          = 59
+    MAX_UPLOADS_PER_RUN  = 1       # 1 per run × 12 cron runs/day = 12/day
 
-    # ── Upload timing ─────────────────────────────────────────
-    # 1 upload per run × 12 cron runs/day (every 2 hrs) = 12 reels/day
-    # The 2-hour gap is the cron schedule itself — no sleeping in code.
-    # Each GitHub Actions run finishes in ~3-5 minutes and exits cleanly.
-    MAX_UPLOADS_PER_RUN = 1
+    UPLOAD_TO_INSTAGRAM  = True
+    UPLOAD_TO_YOUTUBE    = True
 
-    # ── File paths ────────────────────────────────────────────
-    REELS_DIR      = "reels"
-    THUMBS_DIR     = "thumbnails"
-    MOVIE_FILE     = "current_movie.mp4"
-    SESSION_FILE   = "session.json"   # written from IG_SESSION secret at runtime
-    LOG_FILE       = "movies_log.json"
-    PROGRESS_FILE  = "progress.json"
-    DETAIL_LOG     = "detailed_log.txt"
-    THUMB_BG_FILE  = "thumb_background.jpg"   # cached once per movie
+    REELS_DIR       = "reels"
+    THUMBS_DIR      = "thumbnails"
+    MOVIE_FILE      = "current_movie.mp4"
+    IG_SESSION_FILE = "session.json"
+    YT_TOKEN_FILE   = "yt_token.json"
+    LOG_FILE        = "movies_log.json"
+    PROGRESS_FILE   = "progress.json"
+    DETAIL_LOG      = "detailed_log.txt"
+    # Thumbnail bg is now per-movie: thumb_bg_{movie_name_hash}.jpg
+    # so Episode 2 never reuses Episode 1's background
+    THUMB_BG_DIR    = "thumb_cache"
 
     VIDEO_EXTS = (".mp4", ".mkv", ".avi", ".mov", ".webm")
 
-    CAPTIONS = [
+    IG_CAPTIONS = [
         "🎬 {name} | Part {p}/{t}\n\n#movie #reels #viral #trending #fyp #cinema",
         "🔥 {name} — Part {p}/{t}\n\nFollow for next part! 🍿\n\n#movie #viral #reels",
         "🎥 {name} [{p}/{t}]\n\n⬇️ Follow for more parts!\n\n#movies #cinema #viral #fyp",
         "🍿 {name} | Part {p} of {t}\n\nLike & Follow for more ❤️\n\n#movie #trending #reels",
         "📽️ {name} • Part {p}/{t}\n\nStay tuned! 🔔\n\n#film #reels #viral #trending #fyp",
     ]
-
-    GEMINI_VISION_MODELS = [
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
+    YT_TITLES = [
+        "{name} | Part {p}/{t} #Shorts",
+        "{name} — Part {p} of {t} #Shorts",
+        "🎬 {name} Part {p}/{t} #Shorts #Movie",
     ]
+    YT_DESCRIPTION = (
+        "{name} | Part {p} of {t}\n\n"
+        "Watch the full movie in parts on this channel!\n"
+        "Like & Subscribe for more parts 🔔\n\n"
+        "#shorts #movie #viral #trending #cinema"
+    )
+    YT_CATEGORY_ID = "1"   # 1=Film & Animation
+    YT_PRIVACY     = "public"
 
-    GEMINI_IMAGE_MODELS = [
-        "gemini-2.0-flash-exp-image-generation",
-        "imagen-3.0-generate-002",
-    ]
+    GEMINI_VISION_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+    GEMINI_IMAGE_MODELS  = ["gemini-2.0-flash-exp-image-generation",
+                            "imagen-3.0-generate-002"]
 
 
 # ============================================================
 #                      LOGGER
 # ============================================================
 class Logger:
-    """
-    Writes timestamped messages to both console (live) and
-    a log file. Uses flush=True on every print so GitHub
-    Actions shows output immediately instead of buffering it.
-    """
     def __init__(self, filepath):
         self.filepath = filepath
 
@@ -141,29 +157,24 @@ class Logger:
             pass
 
     def info(self, msg):
-        line = f"[{self._short()}] ✅ {msg}"
-        print(line, flush=True)
+        print(f"[{self._short()}] ✅ {msg}", flush=True)
         self._write(f"[{self._ts()}] INFO  | {msg}")
 
     def warn(self, msg):
-        line = f"[{self._short()}] ⚠️  {msg}"
-        print(line, flush=True)
+        print(f"[{self._short()}] ⚠️  {msg}", flush=True)
         self._write(f"[{self._ts()}] WARN  | {msg}")
 
     def error(self, msg):
-        line = f"[{self._short()}] ❌ {msg}"
-        print(line, flush=True)
+        print(f"[{self._short()}] ❌ {msg}", flush=True)
         self._write(f"[{self._ts()}] ERROR | {msg}")
 
     def step(self, num, total, msg):
-        """Big visible step header — shows which stage we're in."""
-        line = f"\n[{self._short()}] ━━━ STEP {num}/{total}: {msg} ━━━"
-        print(line, flush=True)
+        print(f"\n[{self._short()}] ━━━ STEP {num}/{total}: {msg} ━━━", flush=True)
         self._write(f"[{self._ts()}] STEP  | {num}/{total}: {msg}")
 
-    def upload(self, movie, part, total, status):
-        line = f"[{self._ts()}] UPLOAD | {movie} | Part {part}/{total} | {status}"
-        print(f"  📤 {movie} Part {part}/{total} → {status}", flush=True)
+    def upload(self, platform, movie, part, total, status):
+        line = f"[{self._ts()}] UPLOAD|{platform}|{movie}|Part {part}/{total}|{status}"
+        print(f"  📤 [{platform}] {movie} Part {part}/{total} → {status}", flush=True)
         self._write(line)
 
     def separator(self, char="=", length=60):
@@ -173,6 +184,109 @@ class Logger:
 
 
 log = Logger(Config.DETAIL_LOG)
+
+
+# ============================================================
+#       EPISODE / FILENAME PARSER  (the key new logic)
+# ============================================================
+def parse_episode_info(filename):
+    """
+    WHAT: Extracts Season, Episode, and Part numbers from filenames.
+    WHY:  Needed for correct sort order AND clean display names.
+
+    Handles all these formats:
+      Doraemon_S16_–_Episode_1_–_Story_name_–_Tam+Tel+Hin.mkv
+      Doraemon_S16_–_Episode_52_–_Name.mkv
+      Inception_2010_Part1.mp4
+      Avatar_Full_Movie.mp4
+
+    Returns dict with:
+      display_name  → clean human-readable name for captions/thumbnails
+      season        → int or None
+      episode       → int or None
+      file_part     → int or None (for filenames with Part1/Part2)
+      sort_key      → tuple for correct numerical sort
+    """
+    stem = Path(filename).stem
+
+    # Extract season number (S16, S1, Season_2, etc.)
+    season_match = re.search(r'[Ss](?:eason[_\s]?)?(\d+)', stem)
+    season = int(season_match.group(1)) if season_match else None
+
+    # Extract episode number (Episode_1, Episode_52, Ep1, E01, etc.)
+    ep_match = re.search(r'[Ee]p(?:isode)?[_\s\-–]*(\d+)', stem)
+    episode = int(ep_match.group(1)) if ep_match else None
+
+    # Extract file part number (Part1, Part_2, part01)
+    part_match = re.search(r'[Pp]art[_\s]?(\d+)', stem)
+    file_part = int(part_match.group(1)) if part_match else None
+
+    # ── Build clean display name ──────────────────────────────
+    # 1. Replace underscores and dashes with spaces
+    clean = re.sub(r'[_]+', ' ', stem)
+    clean = re.sub(r'\s*[–—-]\s*', ' – ', clean)
+
+    # 2. Remove language tags at end: Tam, Tel, Hin, Eng, Sub, Dub
+    #    and everything after them (often joined with + signs)
+    clean = re.sub(
+        r'\s*[–—-]?\s*(Tam|Tel|Hin|Eng|Sub|Dub)(\+(?:Tam|Tel|Hin|Eng|Sub|Dub))*\s*$',
+        '', clean, flags=re.IGNORECASE
+    )
+
+    # 3. Shorten very long names for thumbnail/caption readability
+    #    Keep: Series name + Episode number + Episode title (max 40 chars total)
+    if episode is not None:
+        # Extract the series name (everything before "Episode")
+        series_match = re.match(r'^(.*?)\s*[–—-]?\s*[Ee]pisode', clean)
+        series_name  = series_match.group(1).strip() if series_match else clean
+
+        # Extract episode title (everything after "Episode N –")
+        title_match = re.search(
+            r'[Ee]pisode\s+\d+\s*[–—-]\s*(.+)$', clean)
+        ep_title = title_match.group(1).strip() if title_match else ""
+
+        # Build: "Series Ep.N – Title" (truncate title if too long)
+        if ep_title:
+            short_title = ep_title[:30] + "..." if len(ep_title) > 30 else ep_title
+            display_name = f"{series_name} Ep.{episode} – {short_title}"
+        else:
+            display_name = f"{series_name} Ep.{episode}"
+    else:
+        display_name = clean.strip()
+
+    # 4. Final cleanup: collapse multiple spaces
+    display_name = re.sub(r'\s{2,}', ' ', display_name).strip()
+
+    # ── Build sort key (so Episode 10 comes AFTER Episode 9) ──
+    # Sort by (season, episode, file_part, filename)
+    sort_key = (
+        season   if season   is not None else 9999,
+        episode  if episode  is not None else 9999,
+        file_part if file_part is not None else 0,
+        filename,
+    )
+
+    return {
+        "display_name": display_name,
+        "season":       season,
+        "episode":      episode,
+        "file_part":    file_part,
+        "sort_key":     sort_key,
+    }
+
+
+def thumb_bg_path_for_movie(movie_name):
+    """
+    WHAT: Returns a unique thumbnail background cache path per movie.
+    WHY:  Without this, Episode 2 would reuse Episode 1's background
+          because they shared the same 'thumb_background.jpg' file.
+    HOW:  Uses a short hash of the movie filename as the cache filename.
+    """
+    os.makedirs(Config.THUMB_BG_DIR, exist_ok=True)
+    # Simple hash: take last 12 chars of hex digest
+    import hashlib
+    h = hashlib.md5(movie_name.encode()).hexdigest()[:12]
+    return os.path.join(Config.THUMB_BG_DIR, f"thumb_bg_{h}.jpg")
 
 
 # ============================================================
@@ -199,16 +313,28 @@ def save_json(filepath, data):
 
 
 def movie_display_name(filename):
-    return Path(filename).stem
+    """Returns the clean display name for a movie filename."""
+    return parse_episode_info(filename)["display_name"]
 
 
-def cleanup_temp():
-    """Delete all temporary files to free disk space after movie completes."""
+def cleanup_temp(movie_name=None):
+    """
+    Delete temp files after a movie completes.
+    Keeps thumb_cache/ for other episodes — only removes this movie's bg.
+    """
     log.info("🧹 Cleaning up temp files...")
-    for path in [Config.MOVIE_FILE, Config.THUMB_BG_FILE]:
+    for path in [Config.MOVIE_FILE, Config.IG_SESSION_FILE, Config.YT_TOKEN_FILE]:
         if os.path.exists(path):
             os.remove(path)
             log.info(f"   Deleted: {path}")
+
+    # Delete this specific movie's thumbnail background cache
+    if movie_name:
+        bg = thumb_bg_path_for_movie(movie_name)
+        if os.path.exists(bg):
+            os.remove(bg)
+            log.info(f"   Deleted: {bg}")
+
     for folder in [Config.REELS_DIR, Config.THUMBS_DIR]:
         if os.path.exists(folder):
             shutil.rmtree(folder)
@@ -216,148 +342,122 @@ def cleanup_temp():
     log.info("🧹 Cleanup done")
 
 
+def _ensure_gitignore():
+    gitignore = ".gitignore"
+    entries   = [
+        "# Auth tokens + large temp files — never commit these!",
+        "session.json",
+        "yt_token.json",
+        "current_movie.mp4",
+        "reels/",
+        "thumbnails/",
+        "tmp_frames/",
+        "thumb_cache/",
+    ]
+    try:
+        existing = ""
+        if os.path.exists(gitignore):
+            with open(gitignore, "r") as f:
+                existing = f.read()
+        new_entries = [e for e in entries if e not in existing]
+        if new_entries:
+            with open(gitignore, "a") as f:
+                f.write("\n" + "\n".join(new_entries) + "\n")
+            os.system(f'git add "{gitignore}"')
+            log.info("🔒 .gitignore updated")
+    except Exception as e:
+        log.warn(f"Could not update .gitignore: {e}")
+
+
 def git_push():
-    """
-    Push only tracking files to GitHub.
-    IMPORTANT: session.json is intentionally EXCLUDED from git push
-    because it contains Instagram login tokens — never commit it
-    to a public repo. It is written fresh from IG_SESSION secret
-    every run and deleted from git history if accidentally added.
-    """
     log.info("📁 Pushing progress to GitHub...")
     try:
         os.system('git config user.name "Reel Bot"')
         os.system('git config user.email "bot@reelbot.com"')
-
-        # Add ONLY these safe tracking files — NOT session.json
-        safe_files = [Config.LOG_FILE, Config.PROGRESS_FILE, Config.DETAIL_LOG]
-        for f in safe_files:
+        _ensure_gitignore()
+        for f in [Config.LOG_FILE, Config.PROGRESS_FILE, Config.DETAIL_LOG]:
             if os.path.exists(f):
                 os.system(f'git add "{f}"')
                 log.info(f"   Staged: {f}")
-
-        # Make sure session.json is in .gitignore so it is never accidentally added
-        _ensure_gitignore()
-
-        result = os.system(
-            'git diff --staged --quiet || git commit -m "🤖 Auto: progress update"'
-        )
+        os.system('git diff --staged --quiet || git commit -m "🤖 Auto: progress update"')
         os.system('git push')
         log.info("📁 GitHub push complete")
     except Exception as e:
         log.error(f"Git push failed: {e}")
 
 
-def _ensure_gitignore():
-    """Add session.json to .gitignore so it is never committed to the repo."""
-    gitignore = ".gitignore"
-    entry = "session.json"
-    try:
-        existing = ""
-        if os.path.exists(gitignore):
-            with open(gitignore, "r") as f:
-                existing = f.read()
-        if entry not in existing:
-            with open(gitignore, "a") as f:
-                f.write(f"\n# Instagram session token — never commit this!\n{entry}\n")
-            os.system(f'git add "{gitignore}"')
-            log.info("🔒 session.json added to .gitignore (security: not tracked by git)")
-    except Exception as e:
-        log.warn(f"Could not update .gitignore: {e}")
-
-
 # ============================================================
-#              STEP 1 — SESSION FROM SECRET
+#         STEP 1 — WRITE SESSIONS FROM SECRETS
 # ============================================================
 def write_session_from_secret():
-    """
-    WHAT: Reads IG_SESSION GitHub Secret and writes it to session.json on disk.
-    WHY:  We store the session as a secret (not a file) so it never appears
-          in the git repo — safe for public repos.
-    HOW:  In GitHub Secrets, name = IG_SESSION, value = full contents of
-          session.json including the opening { and closing }.
-    """
-    log.step(1, 10, "Write Instagram session from GitHub Secret")
-    session_json = Config.IG_SESSION.strip()
+    log.step(1, 10, "Write auth tokens from GitHub Secrets to disk")
 
-    if not session_json:
-        log.warn("IG_SESSION secret is empty — will try existing session.json if present")
-        if os.path.exists(Config.SESSION_FILE):
-            log.info("Found existing session.json on disk — will use it")
+    for secret_value, filepath, name in [
+        (Config.IG_SESSION, Config.IG_SESSION_FILE, "IG_SESSION → session.json"),
+        (Config.YT_TOKEN,   Config.YT_TOKEN_FILE,   "YT_TOKEN → yt_token.json"),
+    ]:
+        val = secret_value.strip()
+        if val:
+            log.info(f"{name} secret found — writing...")
+            try:
+                parsed = json.loads(val)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    json.dump(parsed, f, indent=4)
+                log.info(f"🔑 {filepath} written (NOT committed to git)")
+            except json.JSONDecodeError as e:
+                log.error(f"{name} secret is not valid JSON: {e}")
+                log.error("Paste FULL contents including {{ and }}")
+            except IOError as e:
+                log.error(f"Could not write {filepath}: {e}")
         else:
-            log.error("No session available! Add IG_SESSION secret to GitHub Secrets.")
-        return
-
-    log.info("IG_SESSION secret found — validating JSON...")
-    try:
-        parsed = json.loads(session_json)
-    except json.JSONDecodeError as e:
-        log.error(f"IG_SESSION is not valid JSON: {e}")
-        log.error("Go to GitHub → Settings → Secrets → IG_SESSION")
-        log.error("Value must be the FULL contents of session.json including {{ and }}")
-        return
-
-    log.info("JSON valid — writing session.json to disk (NOT to git)...")
-    try:
-        with open(Config.SESSION_FILE, "w", encoding="utf-8") as f:
-            json.dump(parsed, f, indent=4, ensure_ascii=False)
-        log.info("🔑 session.json written successfully (temp file, not committed to git)")
-    except IOError as e:
-        log.error(f"Could not write session.json: {e}")
+            if os.path.exists(filepath):
+                log.info(f"{name} secret empty — using existing {filepath}")
+            else:
+                log.warn(f"{name} secret empty and {filepath} not found")
 
 
 # ============================================================
-#              STEP 2 — VERIFY SETUP
+#         STEP 2 — VERIFY SETUP
 # ============================================================
 def verify_setup():
-    """
-    WHAT: Checks all required GitHub Secrets are set before doing anything.
-    WHY:  Fail fast with a clear message rather than crashing halfway through.
-    """
     log.step(2, 10, "Verify all required GitHub Secrets")
     critical_missing = []
-
-    checks = [
-        (Config.IG_USERNAME,      "IG_USERNAME",      "Your Instagram username (no @)"),
-        (Config.IG_PASSWORD,      "IG_PASSWORD",      "Your Instagram password"),
+    for value, name, desc in [
+        (Config.IG_USERNAME,      "IG_USERNAME",      "Instagram username"),
+        (Config.IG_PASSWORD,      "IG_PASSWORD",      "Instagram password"),
         (Config.GDRIVE_FOLDER_ID, "GDRIVE_FOLDER_ID", "Google Drive folder ID"),
         (Config.GDRIVE_API_KEY,   "GDRIVE_API_KEY",   "Google Drive API key"),
-    ]
-    for value, name, description in checks:
+    ]:
         if value:
-            log.info(f"   ✓ {name} is set")
+            log.info(f"   ✓ {name}")
         else:
-            log.error(f"   ✗ {name} is MISSING — {description}")
+            log.error(f"   ✗ {name} MISSING — {desc}")
             critical_missing.append(name)
 
-    if Config.GEMINI_API_KEY:
-        log.info("   ✓ GEMINI_API_KEY is set (AI thumbnails enabled)")
-    else:
-        log.warn("   ~ GEMINI_API_KEY not set → will use video frames for thumbnails")
-
-    if Config.IG_SESSION or os.path.exists(Config.SESSION_FILE):
-        log.info("   ✓ Instagram session available")
-    else:
-        log.warn("   ~ No Instagram session — login will fail")
+    log.info(f"   {'✓' if Config.GEMINI_API_KEY else '~'} GEMINI_API_KEY "
+             f"{'(AI thumbnails)' if Config.GEMINI_API_KEY else '(not set → video frames)'}")
+    log.info(f"   {'✓' if os.path.exists(Config.IG_SESSION_FILE) else '~'} "
+             f"Instagram session {'ready' if os.path.exists(Config.IG_SESSION_FILE) else 'MISSING'}")
+    log.info(f"   {'✓' if os.path.exists(Config.YT_TOKEN_FILE) else '~'} "
+             f"YouTube token {'ready' if os.path.exists(Config.YT_TOKEN_FILE) else 'not set → YT skipped'}")
 
     if critical_missing:
-        log.error(f"STOPPING: {len(critical_missing)} required secret(s) missing: "
-                  f"{', '.join(critical_missing)}")
+        log.error(f"STOPPING: missing secrets: {', '.join(critical_missing)}")
         return False
-
     log.info("✅ All required secrets verified")
     return True
 
 
 # ============================================================
-#              STEP 3 — GOOGLE DRIVE SCAN
+#         STEP 3 — GOOGLE DRIVE SCAN (with correct sort)
 # ============================================================
 def list_drive_movies():
     """
-    WHAT: Lists all video files in your Google Drive folder.
-    WHY:  Detects new movies automatically — just upload to Drive and
-          the script finds them on the next run.
-    NEEDS: Folder must be shared as 'Anyone with the link can view'.
+    WHAT: List all video files in the Drive folder.
+    SORT: By Season + Episode NUMBER (not alphabetically).
+          Drive API orderBy=name gives WRONG order for multi-digit episodes.
+          Episode_10 comes before Episode_2 alphabetically.
+          We fix this by re-sorting after fetching.
     """
     log.step(3, 10, "Scan Google Drive folder for video files")
     folder_id  = Config.GDRIVE_FOLDER_ID
@@ -366,383 +466,278 @@ def list_drive_movies():
     all_files  = []
     page_token = None
 
-    log.info(f"Calling Google Drive API v3...")
-    log.info(f"Folder ID: {folder_id}")
+    log.info(f"Calling Drive API — folder: {folder_id}")
 
     while True:
         params = {
-            "q": f"'{folder_id}' in parents and trashed=false",
-            "key": api_key,
-            "fields": "nextPageToken,files(id,name,size,mimeType,createdTime)",
+            "q":       f"'{folder_id}' in parents and trashed=false",
+            "key":     api_key,
+            "fields":  "nextPageToken,files(id,name,size,mimeType,createdTime)",
             "pageSize": 100,
-            "orderBy": "name",
+            # NOTE: we intentionally do NOT use orderBy here because
+            # alphabetical order is wrong for multi-digit episode numbers.
+            # We sort correctly ourselves after fetching.
         }
         if page_token:
             params["pageToken"] = page_token
 
         try:
-            log.info("Sending Drive API request...")
             r = requests.get(url, params=params, timeout=30)
-            log.info(f"Drive API response: HTTP {r.status_code}")
+            log.info(f"Drive API: HTTP {r.status_code}")
 
             if r.status_code == 403:
-                log.error("Drive API: 403 Access denied.")
-                log.error("Fix: Share the Drive folder → 'Anyone with the link' → Viewer")
+                log.error("403 Access denied — share folder as 'Anyone with link' → Viewer")
                 return []
             if r.status_code == 404:
-                log.error("Drive API: 404 Folder not found.")
-                log.error("Fix: Check GDRIVE_FOLDER_ID secret is the correct folder ID")
+                log.error("404 Folder not found — check GDRIVE_FOLDER_ID")
                 return []
             if r.status_code != 200:
-                log.error(f"Drive API unexpected error {r.status_code}: {r.text[:300]}")
+                log.error(f"Drive API error {r.status_code}: {r.text[:300]}")
                 return []
 
             data = r.json()
-            files_on_page = data.get("files", [])
-            log.info(f"Got {len(files_on_page)} items from Drive (this page)")
-
-            for f in files_on_page:
+            for f in data.get("files", []):
                 name = f["name"]
                 if any(name.lower().endswith(ext) for ext in Config.VIDEO_EXTS):
+                    info    = parse_episode_info(name)
                     size_mb = round(int(f.get("size", 0)) / (1024*1024), 1)
-                    log.info(f"   🎬 Found video: {name} ({size_mb} MB)")
                     all_files.append({
-                        "id":      f["id"],
-                        "name":    name,
-                        "size":    int(f.get("size", 0)),
-                        "created": f.get("createdTime", ""),
+                        "id":           f["id"],
+                        "name":         name,
+                        "size":         int(f.get("size", 0)),
+                        "created":      f.get("createdTime", ""),
+                        "display_name": info["display_name"],
+                        "sort_key":     info["sort_key"],
+                        "season":       info["season"],
+                        "episode":      info["episode"],
                     })
-                else:
-                    log.info(f"   ⏭️  Skipping non-video: {name}")
+                    log.info(f"   Found: {name}")
+                    log.info(f"          → Display: '{info['display_name']}' "
+                             f"| Season={info['season']} Episode={info['episode']} "
+                             f"({size_mb} MB)")
 
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
-            log.info("More pages available — fetching next page...")
 
         except requests.exceptions.RequestException as e:
             log.error(f"Drive API network error: {e}")
             return []
 
+    # ── CORRECT SORT: by Season + Episode NUMBER ──────────────
+    # This ensures Episode_10 comes AFTER Episode_9, not before Episode_2
+    all_files.sort(key=lambda f: f["sort_key"])
+
     log.info(f"Drive scan complete: {len(all_files)} video(s) found")
+    log.info("Episode order after correct numerical sort:")
+    for i, f in enumerate(all_files, 1):
+        log.info(f"   {i}. {f['display_name']} ({f['name']})")
+
     return all_files
 
 
 def download_movie(file_id, output_path):
-    """
-    WHAT: Downloads the movie file from Google Drive using gdown.
-    WHY:  We download each time (not stored in repo) to save GitHub storage.
-    """
-    log.step(6, 10, f"Download movie from Google Drive")
-    log.info(f"File ID: {file_id}")
-    log.info(f"Saving to: {output_path}")
+    log.step(6, 10, "Download movie from Google Drive")
+    log.info(f"File ID: {file_id}  →  {output_path}")
     try:
         if os.path.exists(output_path):
-            log.info("Removing old download file...")
             os.remove(output_path)
-
-        log.info("Starting download (progress shown below)...")
+        log.info("Starting download...")
         gdown.download(f"https://drive.google.com/uc?id={file_id}",
                        output_path, quiet=False)
-
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            log.info(f"✅ Download complete! File size: {size_mb:.1f} MB")
+            log.info(f"✅ Download complete! {size_mb:.1f} MB")
             return True
-
-        log.error("Download finished but file is empty or missing!")
+        log.error("Download file is empty!")
         return False
-
     except Exception as e:
-        log.error(f"Download exception: {e}")
+        log.error(f"Download failed: {e}")
         log.error(traceback.format_exc())
         return False
 
 
 # ============================================================
-#              STEP 7 — VIDEO INFO (fast ffprobe)
+#         STEP 7 — VIDEO INFO
 # ============================================================
 def ffprobe_duration(video_path):
-    """
-    WHAT: Reads video duration using ffprobe (part of ffmpeg).
-    WHY:  Fast metadata read — does not decode any video frames.
-    TIME: ~0.1 seconds.
-    """
-    log.info("Reading video duration with ffprobe...")
+    log.info("Reading duration with ffprobe...")
     try:
-        cmd = [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            video_path,
-        ]
+        cmd    = ["ffprobe", "-v", "error",
+                  "-show_entries", "format=duration",
+                  "-of", "default=noprint_wrappers=1:nokey=1",
+                  video_path]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         duration = float(result.stdout.strip())
-        log.info(f"ffprobe result: {duration:.2f} seconds")
+        log.info(f"Duration: {duration:.2f}s = {int(duration)//60}m {int(duration)%60}s")
         return duration
     except Exception as e:
         log.error(f"ffprobe failed: {e}")
-        log.error("Is ffmpeg installed? Workflow should install it with apt-get.")
         return 0.0
 
 
 def get_video_info(video_path):
-    """Calculate how many 60-second parts the movie will be split into."""
     log.step(7, 10, "Analyse video duration and calculate parts count")
     duration = ffprobe_duration(video_path)
     if duration <= 0:
         return 0, 0
-
-    total_parts = 0
-    start = 0
-    while start < duration:
-        end = min(start + Config.CLIP_LENGTH, duration)
-        if end - start >= 5:   # skip tiny final clips under 5s
-            total_parts += 1
-        start += Config.CLIP_LENGTH
-
-    log.info(f"Video: {int(duration)//60}m {int(duration)%60}s total")
-    log.info(f"Split into: {total_parts} parts × {Config.CLIP_LENGTH}s each")
+    total_parts = sum(
+        1 for start in range(0, int(duration), Config.CLIP_LENGTH)
+        if min(start + Config.CLIP_LENGTH, duration) - start >= 5
+    )
+    log.info(f"Will split into {total_parts} parts × {Config.CLIP_LENGTH}s each")
     return duration, total_parts
 
 
 # ============================================================
-#          STEP 9 (part A) — CLIP EXTRACTION (ffmpeg fast)
+#         CLIP EXTRACTION (ffmpeg, fast stream copy)
 # ============================================================
 def extract_clip(video_path, part_num, total_parts, output_path):
     """
-    WHAT: Cuts a 60-second segment from the movie.
-    HOW:  ffmpeg -c copy (stream copy, NO re-encoding).
-          This copies raw video bytes — no quality loss, extremely fast.
-    WHY NOT moviepy: moviepy re-encodes every frame through Python.
-          On a GitHub runner it takes 3-8 minutes per clip.
-          ffmpeg stream copy takes 2-5 SECONDS per clip.
-    TIME: ~2-5 seconds per clip.
+    ffmpeg -c copy = stream copy, NO re-encoding.
+    ~2-5 seconds per clip. Previously moviepy took 3-8 MINUTES.
     """
-    start        = (part_num - 1) * Config.CLIP_LENGTH
-    duration_sec = Config.CLIP_LENGTH
-
-    log.info(f"✂️  Cutting Part {part_num}/{total_parts} | "
-             f"Time range: {start}s → {start + duration_sec}s")
-    log.info(f"   Method: ffmpeg stream-copy (no re-encoding, very fast)")
-    log.info(f"   Output: {output_path}")
-
+    start = (part_num - 1) * Config.CLIP_LENGTH
+    log.info(f"✂️  Part {part_num}/{total_parts} | {start}s→{start+Config.CLIP_LENGTH}s | "
+             "ffmpeg stream-copy (no re-encode)")
     cmd = [
         "ffmpeg", "-y",
-        "-ss", str(start),           # seek before input = fast seek
-        "-i", video_path,
-        "-t", str(duration_sec),
-        "-c", "copy",                # COPY bytes, do NOT re-encode
+        "-ss", str(start), "-i", video_path,
+        "-t", str(Config.CLIP_LENGTH),
+        "-c", "copy",
         "-avoid_negative_ts", "make_zero",
-        "-movflags", "+faststart",   # makes MP4 streamable
+        "-movflags", "+faststart",
         output_path,
     ]
-
     try:
-        log.info(f"   Running: ffmpeg -ss {start} -t {duration_sec} -c copy ...")
-        t_start = time.time()
-        result  = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        elapsed = time.time() - t_start
-
+        t0     = time.time()
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0:
-            log.error(f"ffmpeg failed (exit code {result.returncode})")
-            log.error(f"ffmpeg stderr: {result.stderr[-600:]}")
+            log.error(f"ffmpeg error: {result.stderr[-400:]}")
             return False
-
         if os.path.exists(output_path) and os.path.getsize(output_path) > 10_000:
-            size_mb = os.path.getsize(output_path) / (1024*1024)
-            log.info(f"   ✅ Clip ready in {elapsed:.1f}s — size: {size_mb:.1f} MB")
+            mb = os.path.getsize(output_path) / (1024*1024)
+            log.info(f"   ✅ Clip ready in {time.time()-t0:.1f}s — {mb:.1f} MB")
             return True
-        else:
-            log.error(f"ffmpeg produced no output file for part {part_num}")
-            return False
-
+        log.error("ffmpeg produced empty output")
+        return False
     except subprocess.TimeoutExpired:
-        log.error(f"ffmpeg timed out after 120s on part {part_num}")
+        log.error("ffmpeg timed out")
         return False
     except Exception as e:
-        log.error(f"extract_clip exception: {e}")
+        log.error(f"extract_clip error: {e}")
         return False
 
 
 # ============================================================
-#          STEP 9 (part B) — THUMBNAIL BACKGROUND
+#         THUMBNAIL GENERATION
 # ============================================================
 def extract_frame_ffmpeg(video_path, time_sec, output_jpg):
-    """
-    WHAT: Extracts one frame from the video as a JPEG image.
-    TIME: ~0.5 seconds per frame.
-    """
-    log.info(f"   Extracting frame at t={time_sec:.1f}s → {output_jpg}")
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", str(time_sec),
-        "-i", video_path,
-        "-frames:v", "1",
-        "-q:v", "2",
-        output_jpg,
-    ]
+    log.info(f"   Frame at t={time_sec:.1f}s → {output_jpg}")
+    cmd = ["ffmpeg", "-y", "-ss", str(time_sec), "-i", video_path,
+           "-frames:v", "1", "-q:v", "2", output_jpg]
     try:
         subprocess.run(cmd, capture_output=True, timeout=30)
         if os.path.exists(output_jpg) and os.path.getsize(output_jpg) > 0:
             img = Image.open(output_jpg).copy()
-            log.info(f"   Frame extracted: {img.width}×{img.height}px")
+            log.info(f"   Frame: {img.width}×{img.height}px")
             return img
     except Exception as e:
-        log.error(f"Frame extract failed at t={time_sec:.1f}s: {e}")
-    log.warn(f"   Using blank fallback frame")
+        log.error(f"Frame extract failed: {e}")
     return Image.new("RGB", (1280, 720), (20, 20, 40))
 
 
 def extract_frames_for_grid(video_path, duration, frame_count=9):
-    """
-    WHAT: Extracts 9 frames spread across the movie for thumbnail selection.
-    WHY:  Gemini AI will look at all 9 and pick the most attractive one.
-    TIME: ~5-8 seconds total (9 × ~0.5s ffmpeg calls).
-    """
-    log.info(f"Extracting {frame_count} candidate frames from video...")
-    log.info(f"Spread across: 15% to 78% of movie duration ({duration:.0f}s)")
+    log.info(f"Extracting {frame_count} frames from video for thumbnail selection...")
     frames  = []
     tmp_dir = "tmp_frames"
     os.makedirs(tmp_dir, exist_ok=True)
-
     for i in range(frame_count):
-        t   = duration * (0.15 + i * 0.07)
-        t   = min(t, duration - 1.0)
+        t   = min(duration * (0.15 + i * 0.07), duration - 1.0)
         out = os.path.join(tmp_dir, f"frame_{i}.jpg")
         log.info(f"   Frame {i+1}/{frame_count}: t={t:.1f}s")
-        img = extract_frame_ffmpeg(video_path, t, out)
-        frames.append(img)
-
+        frames.append(extract_frame_ffmpeg(video_path, t, out))
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    log.info(f"All {frame_count} frames extracted successfully")
+    log.info("All frames extracted")
     return frames
 
 
 def create_frame_grid(frames, tile_size=320):
-    """Arrange 9 frames into a 3×3 grid image for Gemini to analyse."""
-    log.info(f"Building 3×3 frame grid (tile size: {tile_size}px)...")
+    log.info("Building 3×3 frame grid for Gemini selection...")
     grid = Image.new("RGB", (tile_size * 3, tile_size * 3))
     for idx, img in enumerate(frames):
-        x = (idx % 3) * tile_size
-        y = (idx // 3) * tile_size
-        grid.paste(img.resize((tile_size, tile_size)), (x, y))
-    log.info(f"Grid created: {grid.width}×{grid.height}px")
+        grid.paste(img.resize((tile_size, tile_size)),
+                   ((idx % 3) * tile_size, (idx // 3) * tile_size))
     return grid
 
 
 def choose_best_frame_with_gemini(grid_image, frames):
-    """
-    WHAT: Sends the 3×3 frame grid to Gemini and asks it to pick
-          the most visually attractive frame for the thumbnail (1-9).
-    WHY:  AI picks a frame with good lighting, interesting action,
-          and visible characters rather than a random middle frame.
-    FALLBACK: Uses frame 5 (middle) if Gemini fails or is not configured.
-    IMPORTANT: Uses Part.from_bytes() API — NOT raw dicts.
-    """
     if not GEMINI_AVAILABLE or not Config.GEMINI_API_KEY:
-        log.warn("Gemini not configured → using middle frame (frame 5) as thumbnail")
+        log.warn("Gemini not available → middle frame")
         return frames[4]
-
-    log.info("Converting grid image to JPEG bytes for Gemini...")
     buf = BytesIO()
     grid_image.save(buf, format="JPEG", quality=85)
-    image_bytes = buf.getvalue()
-    log.info(f"Grid image size: {len(image_bytes) / 1024:.1f} KB")
-
-    prompt_text = (
+    prompt = (
         "You are selecting the best movie thumbnail frame.\n"
-        "The image shows a 3x3 grid numbered:\n"
-        "  1 2 3\n  4 5 6\n  7 8 9\n\n"
-        "Pick the frame that is brightest, clearest, has visible "
-        "characters or action, and would attract the most viewers.\n"
-        "Reply with ONLY a single digit 1-9. Nothing else."
+        "Grid numbered:\n  1 2 3\n  4 5 6\n  7 8 9\n\n"
+        "Pick the brightest, clearest frame with visible characters.\n"
+        "Reply with ONLY a single digit 1-9."
     )
-
     try:
-        log.info("Initialising Gemini client...")
         client = genai.Client(api_key=Config.GEMINI_API_KEY)
     except Exception as e:
-        log.warn(f"Gemini client init failed: {e} → using middle frame")
+        log.warn(f"Gemini init failed: {e} → middle frame")
         return frames[4]
-
-    for model_name in Config.GEMINI_VISION_MODELS:
+    for model in Config.GEMINI_VISION_MODELS:
         try:
-            log.info(f"Asking Gemini ({model_name}) to pick best frame...")
-            image_part = genai_types.Part.from_bytes(
-                data=image_bytes, mime_type="image/jpeg")
-            text_part  = genai_types.Part.from_text(text=prompt_text)
-            response   = client.models.generate_content(
-                model=model_name,
-                contents=[image_part, text_part],
+            log.info(f"Asking Gemini ({model}) to pick best frame...")
+            resp = client.models.generate_content(
+                model=model,
+                contents=[
+                    genai_types.Part.from_bytes(data=buf.getvalue(), mime_type="image/jpeg"),
+                    genai_types.Part.from_text(text=prompt),
+                ],
             )
-            raw   = response.text.strip()
-            log.info(f"Gemini responded: '{raw}'")
-            digit = next((c for c in raw if c.isdigit() and c != "0"), None)
+            digit = next((c for c in resp.text.strip() if c.isdigit() and c != "0"), None)
             if digit and 1 <= int(digit) <= 9:
-                log.info(f"✅ Gemini chose frame #{digit} as best thumbnail background")
+                log.info(f"✅ Gemini chose frame #{digit}")
                 return frames[int(digit) - 1]
-            log.warn(f"Gemini returned unexpected value '{raw}' → trying next model")
         except Exception as e:
-            log.warn(f"Gemini vision {model_name} failed: {e}")
-            log.warn("Trying next Gemini model...")
-
-    log.warn("All Gemini vision models failed → using middle frame (frame 5)")
+            log.warn(f"Gemini {model} failed: {e}")
+    log.warn("All Gemini models failed → middle frame")
     return frames[4]
 
 
 def generate_gemini_background(movie_name):
-    """
-    WHAT: Asks Gemini to generate a cinematic AI poster image.
-    WHY:  Creates a more dramatic, styled background than a raw video frame.
-    NOTE: Only works if your Gemini API key has image generation access.
-          Falls back to best video frame if not available.
-    """
     if not GEMINI_AVAILABLE or not Config.GEMINI_API_KEY:
-        log.info("Gemini image generation skipped (no API key)")
         return None
-
     prompt = (
         f"Cinematic movie poster background for '{movie_name}'. "
-        "Dark moody atmosphere, dramatic lighting, professional quality. "
-        "NO text, NO letters, NO words anywhere in the image."
+        "Dark moody atmosphere, dramatic lighting. NO text, NO words."
     )
-    log.info(f"Trying Gemini AI image generation for: {movie_name}")
-
     try:
         client = genai.Client(api_key=Config.GEMINI_API_KEY)
-    except Exception as e:
-        log.warn(f"Gemini init failed: {e}")
+    except Exception:
         return None
-
-    for model_name in Config.GEMINI_IMAGE_MODELS:
+    for model in Config.GEMINI_IMAGE_MODELS:
         try:
-            log.info(f"   Trying model: {model_name}...")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
+            log.info(f"Trying Gemini image gen ({model})...")
+            resp = client.models.generate_content(
+                model=model, contents=prompt,
                 config=genai_types.GenerateContentConfig(
-                    response_modalities=["IMAGE", "TEXT"]
-                ),
-            )
-            if response.candidates:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data is not None:
-                        image = Image.open(BytesIO(part.inline_data.data))
-                        log.info(f"✅ AI background image generated! "
-                                 f"Size: {image.width}×{image.height}px")
-                        return image
-            log.warn(f"   {model_name}: response had no image → trying next")
+                    response_modalities=["IMAGE", "TEXT"]))
+            if resp.candidates:
+                for part in resp.candidates[0].content.parts:
+                    if hasattr(part, "inline_data") and part.inline_data:
+                        img = Image.open(BytesIO(part.inline_data.data))
+                        log.info(f"✅ AI background generated ({model})")
+                        return img
         except Exception as e:
-            log.warn(f"   {model_name} failed: {e}")
-
-    log.warn("All Gemini image models failed → falling back to best video frame")
+            log.warn(f"Gemini image {model} failed: {e}")
+    log.warn("Gemini image gen failed → best video frame will be used")
     return None
 
 
-# ============================================================
-#                  THUMBNAIL COMPOSER  (Pillow)
-# ============================================================
 def get_font(size):
     for fp in [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -761,31 +756,15 @@ def get_font(size):
 
 def create_thumbnail(bg_image, movie_name, part_num, total_parts,
                      movie_num, total_movies, output_path):
-    """
-    WHAT: Composites the final thumbnail image using Pillow.
-    Layout:
-      - Background: AI-generated or best video frame (resized to 1080×1920)
-      - Dark gradient overlay top and bottom (makes text readable)
-      - Movie title text at top (white, bold, word-wrapped)
-      - Gold "PART X / Y" text at bottom
-      - Grey "Movie N of M" counter below that
-      - Gold decorative line above part number
-    """
-    log.info(f"   Compositing thumbnail for Part {part_num}/{total_parts}...")
+    log.info(f"   Compositing thumbnail Part {part_num}/{total_parts}...")
     try:
         thumb = bg_image.copy().resize((1080, 1920), Image.LANCZOS).convert("RGBA")
-        log.info(f"   Background resized to 1080×1920px")
-
-        # Dark gradient overlays
         overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
         odraw   = ImageDraw.Draw(overlay)
         for y in range(500):
-            odraw.rectangle([(0, y), (1080, y+1)],
-                            fill=(0, 0, 0, int(220 * (1 - y / 500))))
+            odraw.rectangle([(0,y),(1080,y+1)], fill=(0,0,0,int(220*(1-y/500))))
         for y in range(1420, 1920):
-            odraw.rectangle([(0, y), (1080, y+1)],
-                            fill=(0, 0, 0, int(220 * ((y - 1420) / 500))))
-
+            odraw.rectangle([(0,y),(1080,y+1)], fill=(0,0,0,int(220*((y-1420)/500))))
         thumb = Image.alpha_composite(thumb, overlay).convert("RGB")
         draw  = ImageDraw.Draw(thumb)
 
@@ -793,7 +772,7 @@ def create_thumbnail(bg_image, movie_name, part_num, total_parts,
         font_part  = get_font(56)
         font_info  = get_font(36)
 
-        # Word-wrap title
+        # Word-wrap title (max 18 chars per line)
         title = movie_name.upper()
         if len(title) > 18:
             words, lines, line = title.split(), [], ""
@@ -809,201 +788,238 @@ def create_thumbnail(bg_image, movie_name, part_num, total_parts,
         else:
             lines = [title]
 
-        y_cur = 100
+        y_cur = 80
         for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font_title)
+            bbox = draw.textbbox((0,0), line, font=font_title)
             tw   = bbox[2] - bbox[0]
             x    = (1080 - tw) // 2
-            for dx in range(-3, 4):
-                for dy in range(-3, 4):
-                    draw.text((x+dx, y_cur+dy), line, font=font_title, fill="black")
+            for dx in range(-3,4):
+                for dy in range(-3,4):
+                    draw.text((x+dx,y_cur+dy), line, font=font_title, fill="black")
             draw.text((x, y_cur), line, font=font_title, fill="white")
-            y_cur += bbox[3] - bbox[1] + 15
+            y_cur += bbox[3] - bbox[1] + 12
 
-        part_text = f"PART {part_num} / {total_parts}"
-        bbox = draw.textbbox((0, 0), part_text, font=font_part)
-        tw   = bbox[2] - bbox[0]
-        x    = (1080 - tw) // 2
-        for dx in range(-2, 3):
-            for dy in range(-2, 3):
-                draw.text((x+dx, 1740+dy), part_text, font=font_part, fill="black")
-        draw.text((x, 1740), part_text, font=font_part, fill=(255, 215, 0))
+        pt   = f"PART {part_num} / {total_parts}"
+        bbox = draw.textbbox((0,0), pt, font=font_part)
+        x    = (1080 - (bbox[2]-bbox[0])) // 2
+        for dx in range(-2,3):
+            for dy in range(-2,3):
+                draw.text((x+dx,1740+dy), pt, font=font_part, fill="black")
+        draw.text((x,1740), pt, font=font_part, fill=(255,215,0))
 
         ct   = f"Movie {movie_num} of {total_movies}"
-        bbox = draw.textbbox((0, 0), ct, font=font_info)
+        bbox = draw.textbbox((0,0), ct, font=font_info)
         draw.text(((1080-(bbox[2]-bbox[0]))//2, 1810),
-                  ct, font=font_info, fill=(180, 180, 180))
-
-        draw.rectangle([(200, 1720), (880, 1723)], fill=(255, 215, 0))
+                  ct, font=font_info, fill=(180,180,180))
+        draw.rectangle([(200,1720),(880,1723)], fill=(255,215,0))
 
         thumb.save(output_path, "JPEG", quality=95)
-        log.info(f"   ✅ Thumbnail saved: {output_path}")
+        log.info(f"   ✅ Thumbnail saved")
         return True
-
     except Exception as e:
-        log.error(f"Thumbnail compositing failed: {e}")
-        log.error(traceback.format_exc())
-        log.warn("Using plain text fallback thumbnail...")
+        log.error(f"Thumbnail failed: {e}")
         try:
             fb = Image.new("RGB", (1080, 1920), (20, 20, 40))
             d  = ImageDraw.Draw(fb)
             f2 = get_font(60)
-            d.text((100, 800), movie_name,                       font=f2, fill="white")
-            d.text((100, 900), f"Part {part_num}/{total_parts}", font=f2, fill=(255,215,0))
+            d.text((100,800), movie_name,                       font=f2, fill="white")
+            d.text((100,900), f"Part {part_num}/{total_parts}", font=f2, fill=(255,215,0))
             fb.save(output_path, "JPEG")
-            log.info("   Fallback thumbnail saved")
             return True
         except Exception:
             return False
 
 
 # ============================================================
-#              STEP 10 — INSTAGRAM LOGIN (session only)
+#         INSTAGRAM LOGIN
 # ============================================================
 def instagram_login():
-    """
-    WHAT: Logs in to Instagram using the pre-saved session.
-    WHY NO FRESH LOGIN: GitHub Actions uses a different IP every run.
-          Instagram treats each new IP as a suspicious device → sends OTP.
-          Using a session token avoids this — it looks like the same device.
-    HOW SESSION WAS CREATED: You ran generate_session.py on your local PC
-          once, which did the fresh login + OTP there, and saved session.json.
-          That file's contents are stored as IG_SESSION GitHub Secret.
-    SECURITY: session.json is NEVER committed to git. It is written to disk
-          from the secret at runtime and excluded via .gitignore.
-    """
-    log.step(10, 10, "Login to Instagram via saved session")
-
-    if not os.path.exists(Config.SESSION_FILE):
-        log.error("session.json not found on disk!")
-        log.error("Solution: Make sure IG_SESSION secret is set correctly in GitHub.")
+    log.info("── Instagram Login ──────────────────────────────────")
+    if not os.path.exists(Config.IG_SESSION_FILE):
+        log.error("session.json not found. Check IG_SESSION secret.")
         return None
-
-    log.info(f"Loading session from: {Config.SESSION_FILE}")
-
     for attempt in range(1, 4):
         try:
-            log.info(f"Login attempt {attempt}/3...")
+            log.info(f"Instagram login attempt {attempt}/3...")
             cl = Client()
             cl.delay_range = [2, 5]
-            log.info("   Loading session settings...")
-            cl.load_settings(Config.SESSION_FILE)
-            log.info("   Calling cl.login() with saved session...")
+            cl.load_settings(Config.IG_SESSION_FILE)
             cl.login(Config.IG_USERNAME, Config.IG_PASSWORD)
-            log.info("   Verifying session is alive (get_timeline_feed)...")
             cl.get_timeline_feed()
-            log.info("   Refreshing and saving session...")
-            cl.dump_settings(Config.SESSION_FILE)
-            log.info(f"✅ Instagram login successful (attempt {attempt})")
+            cl.dump_settings(Config.IG_SESSION_FILE)
+            log.info(f"✅ Instagram logged in")
             return cl
-
         except ChallengeRequired:
-            log.error("⛔ Instagram sent a security challenge.")
-            log.error("Your session has expired or been flagged.")
-            log.error("FIX: Run generate_session.py on your local PC again,")
-            log.error("     complete the challenge, then update the IG_SESSION secret.")
+            log.error("⛔ Instagram challenge. FIX: regenerate session.json → update IG_SESSION")
             return None
-
         except Exception as e:
-            log.warn(f"Login attempt {attempt} failed: {e}")
+            log.warn(f"Instagram attempt {attempt} failed: {e}")
             if attempt < 3:
-                wait = 30 * attempt
-                log.info(f"Waiting {wait}s before retry {attempt+1}...")
-                time.sleep(wait)
-
-    log.error("All 3 login attempts failed.")
-    log.error("FIX: Regenerate session.json and update IG_SESSION secret.")
+                time.sleep(30 * attempt)
+    log.error("All Instagram login attempts failed")
     return None
 
 
 # ============================================================
-#              UPLOAD REEL
+#         YOUTUBE LOGIN
 # ============================================================
-def upload_reel(cl, video_path, thumbnail_path, caption):
-    """
-    WHAT: Uploads a single 60-second clip to Instagram as a Reel.
-    RETRY: Up to 3 attempts with increasing wait times on failure.
-    RETURNS: True = uploaded | False = failed | 'STOP' = fatal error
-    """
-    file_size_mb = os.path.getsize(video_path) / (1024*1024) if os.path.exists(video_path) else 0
-    log.info(f"   Video file: {video_path} ({file_size_mb:.1f} MB)")
-    log.info(f"   Thumbnail:  {thumbnail_path}")
-    log.info(f"   Caption length: {len(caption)} chars")
+def youtube_login():
+    log.info("── YouTube Login ────────────────────────────────────")
+    if not YT_AVAILABLE:
+        log.warn("google-api-python-client not installed → YouTube skipped")
+        return None
+    if not os.path.exists(Config.YT_TOKEN_FILE):
+        log.warn("yt_token.json not found → YouTube skipped")
+        log.warn("FIX: Run generate_yt_token.py locally, add YT_TOKEN secret")
+        return None
+    try:
+        with open(Config.YT_TOKEN_FILE, "r") as f:
+            token_data = json.load(f)
+        creds = Credentials(
+            token         = token_data.get("token"),
+            refresh_token = token_data.get("refresh_token"),
+            token_uri     = token_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+            client_id     = token_data.get("client_id") or Config.YT_CLIENT_ID,
+            client_secret = token_data.get("client_secret") or Config.YT_CLIENT_SECRET,
+            scopes        = token_data.get("scopes",
+                                           ["https://www.googleapis.com/auth/youtube.upload"]),
+        )
+        if creds.expired and creds.refresh_token:
+            log.info("Token expired — auto-refreshing...")
+            creds.refresh(GoogleAuthRequest())
+            refreshed = {
+                "token": creds.token, "refresh_token": creds.refresh_token,
+                "token_uri": creds.token_uri, "client_id": creds.client_id,
+                "client_secret": creds.client_secret,
+                "scopes": list(creds.scopes) if creds.scopes else [],
+            }
+            with open(Config.YT_TOKEN_FILE, "w") as f:
+                json.dump(refreshed, f, indent=4)
+            log.info("Token refreshed and saved")
+        yt_service = yt_build("youtube", "v3", credentials=creds)
+        log.info("✅ YouTube authenticated")
+        return yt_service
+    except Exception as e:
+        log.error(f"YouTube login failed: {e}")
+        log.warn("YouTube uploads will be skipped this run")
+        return None
 
+
+# ============================================================
+#         INSTAGRAM UPLOAD
+# ============================================================
+def upload_to_instagram(cl, video_path, thumbnail_path, caption):
+    log.info(f"   📸 Instagram upload | "
+             f"{os.path.getsize(video_path)/1024/1024:.1f} MB")
     for retry in range(1, 4):
         try:
-            log.info(f"   Upload attempt {retry}/3 — calling cl.clip_upload()...")
-            t_start = time.time()
-            kwargs  = {"path": video_path, "caption": caption}
+            log.info(f"   Attempt {retry}/3 — cl.clip_upload()...")
+            t0     = time.time()
+            kwargs = {"path": video_path, "caption": caption}
             if thumbnail_path and os.path.exists(thumbnail_path):
                 kwargs["thumbnail"] = Path(thumbnail_path)
             cl.clip_upload(**kwargs)
-            elapsed = time.time() - t_start
-            log.info(f"   cl.clip_upload() returned successfully in {elapsed:.1f}s")
+            log.info(f"   ✅ Instagram done in {time.time()-t0:.1f}s")
             return True
-
         except PleaseWaitFewMinutes:
-            wait = 600 * retry
-            log.warn(f"Instagram rate limit → waiting {wait//60} minutes...")
-            time.sleep(wait)
-
+            time.sleep(600 * retry)
         except ClientThrottledError:
-            wait = 900 * retry
-            log.warn(f"Instagram throttle → waiting {wait//60} minutes...")
-            time.sleep(wait)
-
+            time.sleep(900 * retry)
         except FeedbackRequired as e:
-            log.error(f"Instagram FeedbackRequired: {e}")
-            log.error("Account may be flagged. Upload stopped to protect account.")
+            log.error(f"FeedbackRequired: {e}")
             return "STOP"
-
         except ChallengeRequired:
-            log.error("Instagram challenge required during upload.")
-            log.error("FIX: Update IG_SESSION secret with fresh session.")
+            log.error("Challenge required → update IG_SESSION secret")
             return "STOP"
-
         except LoginRequired:
-            log.warn("Session expired during upload → attempting re-login...")
+            log.warn("Session expired — re-logging...")
             try:
                 cl.login(Config.IG_USERNAME, Config.IG_PASSWORD)
-                cl.dump_settings(Config.SESSION_FILE)
-                log.info("Re-login successful — retrying upload...")
-            except Exception as re_e:
-                log.error(f"Re-login failed: {re_e}")
+                cl.dump_settings(Config.IG_SESSION_FILE)
+            except Exception:
                 return "STOP"
-
-        except ConnectionError as e:
-            wait = 180 * retry
-            log.warn(f"Connection error: {e} → waiting {wait//60}m...")
-            time.sleep(wait)
-
+        except ConnectionError:
+            time.sleep(180 * retry)
         except Exception as e:
-            log.error(f"Upload exception on attempt {retry}: {e}")
-            log.error(traceback.format_exc())
+            log.error(f"Instagram attempt {retry} error: {e}")
             if retry < 3:
-                wait = 300 * retry
-                log.info(f"Waiting {wait//60}m before retry...")
-                time.sleep(wait)
-
-    log.error(f"Upload failed after 3 attempts")
+                time.sleep(300 * retry)
+    log.error("Instagram upload failed after 3 attempts")
     return False
 
 
 # ============================================================
-#                   SMART DELAY (2hr gap)
+#         YOUTUBE UPLOAD
 # ============================================================
-def smart_delay(upload_num):
-    """
-    REMOVED: Delay is now handled by the cron schedule (every 2 hours).
-    This function is kept as a no-op so no other code needs changing.
-    Previously it slept for 2 hours inside GitHub Actions — wasteful.
-    Now the workflow just exits after 1 upload and cron re-triggers it.
-    """
-    log.info("No in-script delay needed — cron schedule handles the 2hr gap")
+def upload_to_youtube(yt_service, video_path, thumbnail_path,
+                      movie_name, part_num, total_parts):
+    if yt_service is None:
+        log.warn("   YouTube service not available — skipping")
+        return False
+
+    title       = random.choice(Config.YT_TITLES).format(
+        name=movie_name, p=part_num, t=total_parts)
+    description = Config.YT_DESCRIPTION.format(
+        name=movie_name, p=part_num, t=total_parts)
+    log.info(f"   ▶️  YouTube Shorts | {os.path.getsize(video_path)/1024/1024:.1f} MB")
+    log.info(f"   Title: {title}")
+
+    body = {
+        "snippet": {
+            "title": title, "description": description,
+            "categoryId": Config.YT_CATEGORY_ID,
+            "tags": ["shorts", "movie", "viral", movie_name],
+        },
+        "status": {
+            "privacyStatus": Config.YT_PRIVACY,
+            "selfDeclaredMadeForKids": False,
+        },
+    }
+
+    for retry in range(1, 4):
+        try:
+            log.info(f"   Attempt {retry}/3 — videos.insert()...")
+            t0    = time.time()
+            media = MediaFileUpload(video_path, mimetype="video/mp4",
+                                    resumable=True, chunksize=10*1024*1024)
+            req   = yt_service.videos().insert(
+                part="snippet,status", body=body, media_body=media)
+            response = None
+            while response is None:
+                status, response = req.next_chunk()
+                if status:
+                    log.info(f"   YouTube upload: {int(status.progress()*100)}%")
+
+            video_id = response.get("id", "unknown")
+            log.info(f"   ✅ YouTube done in {time.time()-t0:.1f}s")
+            log.info(f"   URL: https://www.youtube.com/shorts/{video_id}")
+
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    yt_service.thumbnails().set(
+                        videoId=video_id,
+                        media_body=MediaFileUpload(thumbnail_path, mimetype="image/jpeg"),
+                    ).execute()
+                    log.info("   ✅ YouTube thumbnail uploaded")
+                except Exception as te:
+                    log.warn(f"   Thumbnail failed (video still uploaded): {te}")
+            return True
+
+        except Exception as e:
+            err = str(e)
+            log.error(f"   YouTube attempt {retry} failed: {err}")
+            if "quotaExceeded" in err or "403" in err:
+                log.error("   YouTube quota exceeded — resets midnight Pacific Time")
+                return False
+            if retry < 3:
+                time.sleep(60 * retry)
+
+    log.error("YouTube upload failed after 3 attempts")
+    return False
 
 
 # ============================================================
-#                  MOVIE TRACKER
+#         MOVIE TRACKER
 # ============================================================
 def load_movies_log():
     default = {
@@ -1011,8 +1027,10 @@ def load_movies_log():
         "current_movie": "",
         "total_movies_found": 0,
         "total_completed": 0,
-        "total_reels_uploaded": 0,
+        "total_ig_uploaded": 0,
+        "total_yt_uploaded": 0,
         "last_run": "",
+        "episode_order": [],   # stores correct sorted order of filenames
     }
     data = load_json(Config.LOG_FILE, default)
     for k, v in default.items():
@@ -1025,48 +1043,85 @@ def save_movies_log(data):
     data["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     data["total_completed"] = sum(
         1 for m in data["movies"].values() if m["status"] == "completed")
-    data["total_movies_found"]   = len(data["movies"])
-    data["total_reels_uploaded"] = sum(
-        m.get("uploaded_parts", 0) for m in data["movies"].values())
+    data["total_movies_found"] = len(data["movies"])
+    data["total_ig_uploaded"]  = sum(
+        m.get("ig_uploaded_parts", 0) for m in data["movies"].values())
+    data["total_yt_uploaded"]  = sum(
+        m.get("yt_uploaded_parts", 0) for m in data["movies"].values())
     save_json(Config.LOG_FILE, data)
 
 
 def sync_with_drive(movies_log, drive_files):
-    """Add any new Drive files to tracking. Never removes existing entries."""
+    """
+    Add new files to tracker and update the correct episode_order list.
+    The episode_order list stores filenames in correct numerical sort order
+    so get_next_movie() always picks the right next episode.
+    """
+    # Update the episode order list (sorted by season+episode number)
+    movies_log["episode_order"] = [f["name"] for f in drive_files]
+    log.info(f"Episode order saved: {len(movies_log['episode_order'])} entries")
+
     added = 0
     for f in drive_files:
         name = f["name"]
         if name not in movies_log["movies"]:
+            info = parse_episode_info(name)
             movies_log["movies"][name] = {
-                "drive_id":         f["id"],
-                "status":           "pending",
-                "total_parts":      0,
-                "uploaded_parts":   0,
-                "size_mb":          round(f["size"] / (1024*1024), 1),
-                "started_at":       "",
-                "completed_at":     "",
-                "last_uploaded_at": "",
-                "errors":           0,
+                "drive_id":          f["id"],
+                "status":            "pending",
+                "total_parts":       0,
+                "ig_uploaded_parts": 0,
+                "yt_uploaded_parts": 0,
+                "size_mb":           round(f["size"] / (1024*1024), 1),
+                "display_name":      info["display_name"],
+                "season":            info["season"],
+                "episode":           info["episode"],
+                "started_at":        "",
+                "completed_at":      "",
+                "last_uploaded_at":  "",
+                "errors":            0,
             }
-            log.info(f"🆕 New movie added to tracker: {name}")
+            log.info(f"🆕 New: {info['display_name']} ({name})")
             added += 1
     if added:
-        log.info(f"Added {added} new movie(s) to tracking")
+        log.info(f"Added {added} new movie(s)")
     else:
-        log.info("No new movies detected in Drive")
+        log.info("No new movies detected")
     return movies_log
 
 
 def get_next_movie(movies_log):
-    """Resume in-progress first, then start next pending."""
+    """
+    Pick next movie in correct episode order.
+    Uses episode_order list (sorted by season+episode number)
+    so processing is always Episode 1 → 2 → 3 ... → 52, not alphabetical.
+    """
+    order = movies_log.get("episode_order", [])
+
+    # First: resume any in_progress movie (in order)
+    for name in order:
+        info = movies_log["movies"].get(name)
+        if info and info["status"] == "in_progress":
+            display = info.get("display_name", name)
+            log.info(f"▶️ Resuming: {display}")
+            return name, info
+
+    # Then: start next pending movie (in order)
+    for name in order:
+        info = movies_log["movies"].get(name)
+        if info and info["status"] == "pending":
+            display = info.get("display_name", name)
+            log.info(f"🆕 Starting: {display}")
+            return name, info
+
+    # Fallback: if episode_order is empty (first run), scan movies dict
     for name, info in movies_log["movies"].items():
         if info["status"] == "in_progress":
-            log.info(f"▶️ Resuming in-progress movie: {name}")
             return name, info
     for name, info in movies_log["movies"].items():
         if info["status"] == "pending":
-            log.info(f"🆕 Starting new movie: {name}")
             return name, info
+
     return None, None
 
 
@@ -1079,31 +1134,41 @@ def save_progress(data):
     save_json(Config.PROGRESS_FILE, data)
 
 
+def smart_delay(n):
+    """No-op — delay handled by cron schedule (every 2 hours)."""
+    log.info("No in-script delay — cron handles the 2hr gap")
+
+
 # ============================================================
-#                    SUMMARY REPORT
+#         SUMMARY
 # ============================================================
 def print_summary(movies_log):
     log.separator("=")
-    print("📊 FINAL MOVIES STATUS REPORT", flush=True)
+    print("📊 MOVIES STATUS REPORT", flush=True)
     log.separator("-")
     emoji_map = {"pending":"⏳","in_progress":"🔄","completed":"✅","error":"❌"}
-    for idx, (name, info) in enumerate(movies_log["movies"].items(), 1):
+    order = movies_log.get("episode_order", list(movies_log["movies"].keys()))
+    for idx, name in enumerate(order, 1):
+        info = movies_log["movies"].get(name)
+        if not info:
+            continue
         emoji   = emoji_map.get(info["status"], "❓")
-        display = movie_display_name(name)
-        parts   = f"{info.get('uploaded_parts',0)}/{info.get('total_parts','?')}"
+        display = info.get("display_name", name)
+        ig_p    = info.get("ig_uploaded_parts", 0)
+        yt_p    = info.get("yt_uploaded_parts", 0)
+        total   = info.get("total_parts", "?")
         print(f"  {emoji} #{idx} {display}", flush=True)
-        print(f"      Status: {info['status']} | Parts uploaded: {parts} | "
-              f"Size: {info.get('size_mb','?')} MB", flush=True)
-        if info.get("started_at"):   print(f"      Started:   {info['started_at']}", flush=True)
-        if info.get("completed_at"): print(f"      Completed: {info['completed_at']}", flush=True)
-        if info.get("errors", 0) > 0: print(f"      Errors:    {info['errors']}", flush=True)
+        print(f"      {info['status']} | 📸 IG: {ig_p}/{total} | "
+              f"▶️ YT: {yt_p}/{total} | {info.get('size_mb','?')} MB", flush=True)
+        if info.get("completed_at"):
+            print(f"      Completed: {info['completed_at']}", flush=True)
         print(flush=True)
     log.separator("-")
     total = len(movies_log["movies"])
     done  = movies_log.get("total_completed", 0)
-    reels = movies_log.get("total_reels_uploaded", 0)
-    print(f"  📈 Movies completed:  {done}/{total}", flush=True)
-    print(f"  📤 Total reels uploaded: {reels}", flush=True)
+    print(f"  📈 Episodes: {done}/{total} completed", flush=True)
+    print(f"  📸 Instagram: {movies_log.get('total_ig_uploaded',0)} reels uploaded", flush=True)
+    print(f"  ▶️  YouTube:   {movies_log.get('total_yt_uploaded',0)} Shorts uploaded", flush=True)
     print(f"  🕐 Last run: {movies_log.get('last_run','N/A')}", flush=True)
     log.separator("=")
 
@@ -1113,123 +1178,105 @@ def print_summary(movies_log):
 # ============================================================
 def main():
     log.separator("=")
-    print("🎬 FULLY AUTOMATED INSTAGRAM REEL UPLOADER", flush=True)
-    print(f"📅 Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
-    print(f"📋 Plan: download → thumbnail → login → upload 1 reel → exit (cron handles 2hr gap)", flush=True)
+    print("🎬 FULLY AUTOMATED INSTAGRAM + YOUTUBE REEL UPLOADER", flush=True)
+    print(f"📅 Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", flush=True)
+    print(f"📋 Platforms: "
+          f"{'✅ Instagram' if Config.UPLOAD_TO_INSTAGRAM else '❌ Instagram'}  "
+          f"{'✅ YouTube' if Config.UPLOAD_TO_YOUTUBE else '❌ YouTube'}", flush=True)
     log.separator("=")
 
-    # ── STEP 1: Write session from secret ────────────────────
     write_session_from_secret()
-
-    # ── STEP 2: Verify all secrets ───────────────────────────
     if not verify_setup():
-        log.error("Cannot continue — fix missing secrets above then re-run")
         return
 
-    # ── STEP 3: Scan Drive ───────────────────────────────────
     drive_files = list_drive_movies()
     if not drive_files:
-        log.error("No videos found in Drive. Upload a video and try again.")
+        log.error("No videos found in Drive folder")
         return
 
-    # ── STEP 4: Sync movie tracker ───────────────────────────
     log.step(4, 10, "Sync movie tracker with Drive contents")
     movies_log = load_movies_log()
-    log.info(f"Loaded tracker: {len(movies_log['movies'])} movies known")
     movies_log = sync_with_drive(movies_log, drive_files)
     save_movies_log(movies_log)
-    log.info("Tracker saved")
 
-    # ── STEP 5: Pick next movie ──────────────────────────────
-    log.step(5, 10, "Select next movie to process")
+    log.step(5, 10, "Select next movie/episode to process")
     movie_name, movie_info = get_next_movie(movies_log)
     if not movie_name:
-        log.info("🎉 All movies have been fully uploaded! Nothing to do.")
+        log.info("🎉 All episodes fully uploaded!")
         print_summary(movies_log)
         return
 
-    display_name = movie_display_name(movie_name)
+    display_name = movie_info.get("display_name", movie_display_name(movie_name))
     log.info(f"Selected: {display_name}")
+    log.info(f"File:     {movie_name}")
     log.info(f"Status:   {movie_info['status']}")
-    log.info(f"Size:     {movie_info.get('size_mb','?')} MB")
+    if movie_info.get("season"):
+        log.info(f"Season:   {movie_info['season']}  Episode: {movie_info['episode']}")
 
-    # ── STEP 6: Download ─────────────────────────────────────
     if not download_movie(movie_info["drive_id"], Config.MOVIE_FILE):
-        log.error("Download failed — will retry on next scheduled run")
         movie_info["errors"] = movie_info.get("errors", 0) + 1
         save_movies_log(movies_log)
         git_push()
         return
 
-    # ── STEP 7: Video info ───────────────────────────────────
     duration, total_parts = get_video_info(Config.MOVIE_FILE)
     if total_parts == 0:
-        log.error("Could not read video file — marking as error")
         movie_info["status"] = "error"
         save_movies_log(movies_log)
         git_push()
         return
 
     movie_info["total_parts"] = total_parts
-    log.info(f"Movie will be split into {total_parts} reels × {Config.CLIP_LENGTH}s")
 
-    # ── STEP 8: Mark in progress ─────────────────────────────
-    log.step(8, 10, "Update movie status and load upload progress")
+    log.step(8, 10, "Update status and load upload progress")
     if movie_info["status"] == "pending":
         movie_info["status"]     = "in_progress"
         movie_info["started_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log.info("Status updated: pending → in_progress")
     movies_log["current_movie"] = movie_name
     save_movies_log(movies_log)
 
     progress = load_progress()
     if progress.get("movie_name") != movie_name:
-        log.info("New movie detected — resetting part counter to 0")
+        log.info("New episode — resetting part counter to 0")
         progress = {"movie_name": movie_name,
                     "last_uploaded": 0, "total_parts": total_parts}
     last_uploaded = progress["last_uploaded"]
-    log.info(f"Upload progress: {last_uploaded}/{total_parts} parts done so far")
+    log.info(f"Progress: {last_uploaded}/{total_parts} parts done")
     if last_uploaded > 0:
         log.info(f"Resuming from Part {last_uploaded + 1}")
 
-    # ── STEP 9: Thumbnail background (cached once per movie) ─
-    log.step(9, 10, "Prepare thumbnail background image")
+    # ── Thumbnail background (per-movie cache) ────────────────
+    log.step(9, 10, "Prepare thumbnail background")
+    bg_cache_path = thumb_bg_path_for_movie(movie_name)
     thumb_bg = None
 
-    if os.path.exists(Config.THUMB_BG_FILE):
-        log.info(f"Found cached background: {Config.THUMB_BG_FILE}")
+    if os.path.exists(bg_cache_path):
         try:
-            thumb_bg = Image.open(Config.THUMB_BG_FILE)
-            log.info(f"✅ Cached thumbnail background loaded "
-                     f"({thumb_bg.width}×{thumb_bg.height}px) — skipping generation")
-        except Exception as e:
-            log.warn(f"Could not load cached background ({e}) — regenerating...")
+            thumb_bg = Image.open(bg_cache_path)
+            log.info(f"✅ Cached background loaded for '{display_name}' "
+                     f"({thumb_bg.width}×{thumb_bg.height}px)")
+        except Exception:
             thumb_bg = None
 
     if thumb_bg is None:
-        log.info("No cached background found — generating one now...")
-        log.info("Attempt 1: Gemini AI image generation...")
+        log.info(f"No cache for '{display_name}' — generating background...")
         thumb_bg = generate_gemini_background(display_name)
-
         if thumb_bg is None:
-            log.info("Gemini image gen not available — using best video frame instead")
-            log.info("Attempt 2: Extract 9 frames and ask Gemini vision to pick best...")
             frames   = extract_frames_for_grid(Config.MOVIE_FILE, duration)
             grid     = create_frame_grid(frames)
-            log.info("Sending frame grid to Gemini for selection...")
             thumb_bg = choose_best_frame_with_gemini(grid, frames)
-
-        log.info(f"Saving thumbnail background to {Config.THUMB_BG_FILE}...")
         try:
-            thumb_bg.save(Config.THUMB_BG_FILE, "JPEG", quality=95)
-            log.info(f"✅ Thumbnail background cached for all {total_parts} parts")
+            thumb_bg.save(bg_cache_path, "JPEG", quality=95)
+            log.info(f"✅ Background cached: {bg_cache_path}")
         except Exception as e:
-            log.warn(f"Could not save thumbnail background cache: {e}")
+            log.warn(f"Could not cache background: {e}")
 
-    # ── STEP 10: Instagram login ─────────────────────────────
-    cl = instagram_login()
-    if cl is None:
-        log.error("Instagram login failed — saving progress and stopping")
+    log.step(10, 10, "Login to Instagram and YouTube")
+    cl         = instagram_login() if Config.UPLOAD_TO_INSTAGRAM else None
+    yt_service = youtube_login()   if Config.UPLOAD_TO_YOUTUBE   else None
+
+    if cl is None and yt_service is None:
+        log.error("Both platforms failed login — stopping")
         save_progress(progress)
         save_movies_log(movies_log)
         git_push()
@@ -1238,136 +1285,130 @@ def main():
     os.makedirs(Config.REELS_DIR,  exist_ok=True)
     os.makedirs(Config.THUMBS_DIR, exist_ok=True)
 
-    movie_names  = list(movies_log["movies"].keys())
-    movie_num    = movie_names.index(movie_name) + 1
+    movie_names  = movies_log.get("episode_order",
+                                  list(movies_log["movies"].keys()))
+    movie_num    = (movie_names.index(movie_name) + 1
+                    if movie_name in movie_names else 1)
     total_movies = len(movie_names)
 
-    remaining_parts = total_parts - last_uploaded
-    log.info(f"Ready to upload! Parts remaining: {remaining_parts}")
-    log.info(f"This run will upload up to {Config.MAX_UPLOADS_PER_RUN} parts")
+    log.info(f"Episode {movie_num} of {total_movies} | "
+             f"Parts remaining: {total_parts - last_uploaded}")
     log.separator("=")
 
-    # ── UPLOAD LOOP ──────────────────────────────────────────
+    # ── UPLOAD LOOP ───────────────────────────────────────────
     uploaded_this_run = 0
-    stop_uploading    = False
+    stop_ig           = False
 
     for part_num in range(last_uploaded + 1, total_parts + 1):
 
-        if stop_uploading:
-            log.warn("Upload loop stopped due to fatal error")
-            break
-
         if uploaded_this_run >= Config.MAX_UPLOADS_PER_RUN:
-            log.info(f"🛑 Reached run limit of {Config.MAX_UPLOADS_PER_RUN} uploads")
-            log.info("Remaining parts will be uploaded on the next scheduled run")
-            log.info(f"Parts left: {total_parts - part_num + 1}")
+            log.info(f"🛑 Run limit ({Config.MAX_UPLOADS_PER_RUN}) reached — "
+                     "continuing next scheduled run")
             break
 
         log.separator("-")
-        log.info(f"📦 PART {part_num} of {total_parts} | "
-                 f"'{display_name}' | "
-                 f"Run upload #{uploaded_this_run+1}/{Config.MAX_UPLOADS_PER_RUN}")
+        log.info(f"📦 PART {part_num}/{total_parts} | '{display_name}'")
 
-        # ── Cut clip ─────────────────────────────────────────
         clip_path = os.path.join(Config.REELS_DIR, f"part_{part_num}.mp4")
-        log.info(f"[{part_num}/{total_parts}] Cutting clip with ffmpeg...")
         if not extract_clip(Config.MOVIE_FILE, part_num, total_parts, clip_path):
-            log.warn(f"Clip extraction failed — skipping Part {part_num}")
+            log.warn(f"Clip failed — skipping Part {part_num}")
             progress["last_uploaded"] = part_num
             save_progress(progress)
             continue
 
-        # ── Make thumbnail ───────────────────────────────────
         thumb_path = os.path.join(Config.THUMBS_DIR, f"thumb_{part_num}.jpg")
-        log.info(f"[{part_num}/{total_parts}] Creating thumbnail...")
         if thumb_bg:
             bg_image = thumb_bg.copy()
         else:
-            mid_t    = ((part_num-1) * Config.CLIP_LENGTH) + (Config.CLIP_LENGTH//2)
-            mid_t    = min(mid_t, duration - 1)
-            tmp_jpg  = os.path.join(Config.THUMBS_DIR, f"tmp_{part_num}.jpg")
-            log.info(f"   Extracting fallback frame at t={mid_t:.0f}s...")
+            mid_t   = min(((part_num-1)*Config.CLIP_LENGTH)+(Config.CLIP_LENGTH//2),
+                          duration - 1)
+            tmp_jpg = os.path.join(Config.THUMBS_DIR, f"tmp_{part_num}.jpg")
             bg_image = extract_frame_ffmpeg(Config.MOVIE_FILE, mid_t, tmp_jpg)
-
         create_thumbnail(bg_image, display_name, part_num, total_parts,
                          movie_num, total_movies, thumb_path)
 
-        # ── Build caption ────────────────────────────────────
-        caption = random.choice(Config.CAPTIONS).format(
+        ig_caption = random.choice(Config.IG_CAPTIONS).format(
             name=display_name, p=part_num, t=total_parts)
-        log.info(f"[{part_num}/{total_parts}] Caption: {caption[:60]}...")
 
-        # ── Upload ───────────────────────────────────────────
-        log.info(f"[{part_num}/{total_parts}] Uploading reel to Instagram...")
-        result = upload_reel(cl, clip_path, thumb_path, caption)
+        ig_ok = False
+        yt_ok = False
 
-        if result == "STOP":
-            log.error("Fatal Instagram error — stopping upload loop")
-            log.upload(display_name, part_num, total_parts, "FATAL_STOP")
-            stop_uploading = True
+        if Config.UPLOAD_TO_INSTAGRAM and cl and not stop_ig:
+            log.info(f"[{part_num}/{total_parts}] → Instagram...")
+            ig_result = upload_to_instagram(cl, clip_path, thumb_path, ig_caption)
+            if ig_result == "STOP":
+                log.upload("Instagram", display_name, part_num, total_parts, "FATAL_STOP")
+                stop_ig = True
+            elif ig_result is True:
+                ig_ok = True
+                log.upload("Instagram", display_name, part_num, total_parts, "SUCCESS")
+            else:
+                log.upload("Instagram", display_name, part_num, total_parts, "FAILED")
 
-        elif result is True:
-            log.info(f"✅ Part {part_num}/{total_parts} uploaded successfully!")
-            log.upload(display_name, part_num, total_parts, "SUCCESS")
-            uploaded_this_run             += 1
-            progress["last_uploaded"]      = part_num
-            movie_info["uploaded_parts"]   = part_num
+        if Config.UPLOAD_TO_YOUTUBE and yt_service:
+            log.info(f"[{part_num}/{total_parts}] → YouTube Shorts...")
+            yt_ok = upload_to_youtube(
+                yt_service, clip_path, thumb_path,
+                display_name, part_num, total_parts)
+            log.upload("YouTube", display_name, part_num, total_parts,
+                       "SUCCESS" if yt_ok else "FAILED")
+
+        if ig_ok or yt_ok:
+            uploaded_this_run += 1
+            progress["last_uploaded"] = part_num
+            if ig_ok:
+                movie_info["ig_uploaded_parts"] = part_num
+            if yt_ok:
+                movie_info["yt_uploaded_parts"] = part_num
             movie_info["last_uploaded_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            log.info(f"Saving progress: {part_num}/{total_parts} done")
+            log.info(f"✅ Part {part_num}/{total_parts} done | "
+                     f"IG={'✅' if ig_ok else '❌'}  YT={'✅' if yt_ok else '❌'}")
             save_progress(progress)
             save_movies_log(movies_log)
             git_push()
-
         else:
-            log.error(f"Part {part_num} upload failed after 3 attempts")
-            log.upload(display_name, part_num, total_parts, "FAILED")
+            log.error(f"Part {part_num} failed on all platforms")
             movie_info["errors"] = movie_info.get("errors", 0) + 1
             save_progress(progress)
             save_movies_log(movies_log)
             git_push()
-            log.info("Waiting 10 minutes then continuing to next part...")
-            time.sleep(600)
-            continue
 
-        # ── Cleanup clip + thumbnail ─────────────────────────
-        log.info(f"[{part_num}/{total_parts}] Cleaning up clip and thumbnail files...")
         for f in [clip_path, thumb_path]:
             if os.path.exists(f):
                 os.remove(f)
-                log.info(f"   Deleted: {f}")
 
-        # No in-script delay — cron triggers next run in 2 hours
-
-    # ── Check movie complete ──────────────────────────────────
+    # ── Episode complete? ─────────────────────────────────────
     log.separator("*")
     if progress["last_uploaded"] >= total_parts:
-        log.info(f"🎉🎉🎉 Movie '{display_name}' is FULLY UPLOADED! 🎉🎉🎉")
-        log.info(f"All {total_parts} parts have been posted to Instagram")
-        movie_info["status"]         = "completed"
-        movie_info["uploaded_parts"] = total_parts
-        movie_info["completed_at"]   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        movies_log["current_movie"]  = ""
+        log.info(f"🎉🎉🎉 '{display_name}' FULLY UPLOADED! 🎉🎉🎉")
+        movie_info["status"]       = "completed"
+        movie_info["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        movies_log["current_movie"] = ""
         progress = {"movie_name": "", "last_uploaded": 0, "total_parts": 0}
-        log.info("Cleaning up all temp files for this movie...")
-        cleanup_temp()
+        cleanup_temp(movie_name)
+
+        # Log what episode comes next
+        order = movies_log.get("episode_order", [])
+        if movie_name in order:
+            idx = order.index(movie_name)
+            if idx + 1 < len(order):
+                next_name = order[idx + 1]
+                next_info = parse_episode_info(next_name)
+                log.info(f"⏭️  Next episode: {next_info['display_name']}")
+            else:
+                log.info("🏆 That was the LAST episode in the list!")
     else:
-        remaining = total_parts - progress["last_uploaded"]
-        log.info(f"Run complete — {uploaded_this_run} reels uploaded this run")
-        log.info(f"{remaining} parts still remaining — will continue next scheduled run")
+        left = total_parts - progress["last_uploaded"]
+        log.info(f"{uploaded_this_run} part(s) uploaded | {left} remaining")
+        log.info("Next part will upload on the next scheduled run (~2 hours)")
     log.separator("*")
 
-    # ── Final save ────────────────────────────────────────────
-    log.info("Saving final progress...")
     save_progress(progress)
     save_movies_log(movies_log)
     git_push()
     print_summary(movies_log)
-
     log.separator("=")
-    log.info(f"✅ RUN COMPLETE")
-    log.info(f"   Uploaded this run:  {uploaded_this_run} reels")
-    log.info(f"   Total uploaded:     {movies_log.get('total_reels_uploaded',0)} reels")
-    log.info(f"   Finished at:        {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    log.info(f"✅ RUN COMPLETE — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     log.separator("=")
 
 
@@ -1378,11 +1419,10 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        log.warn("Interrupted by user (Ctrl+C)")
+        log.warn("Interrupted (Ctrl+C)")
         git_push()
     except Exception as e:
-        log.error(f"💥 CRITICAL UNHANDLED ERROR: {e}")
+        log.error(f"💥 CRITICAL ERROR: {e}")
         log.error(traceback.format_exc())
-        log.error("Attempting emergency progress save...")
         git_push()
         sys.exit(1)
