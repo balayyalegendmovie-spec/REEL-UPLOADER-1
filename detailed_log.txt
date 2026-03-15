@@ -222,3 +222,27 @@ contents.list[union[Content,str,is-instance[Image],File,Part,list[union[str,is-i
 [2026-03-15 18:12:15] INFO  | 🔐 Fresh login (attempt 2/3)...
 [2026-03-15 18:12:29] ERROR | Login failed (attempt 2): EOF when reading a line
 [2026-03-15 18:12:29] INFO  | ⏳ Waiting 240s before retry...
+============================================================
+============================================================
+[2026-03-15 18:38:12] INFO  | 🔑 session.json written from IG_SESSION secret
+[2026-03-15 18:38:12] INFO  | ✅ All required credentials verified
+[2026-03-15 18:38:12] INFO  | 📂 Scanning Google Drive folder: 1IDZrQP6r2bWlxdVtaEQ7R09sAWB7v1cc
+[2026-03-15 18:38:12] INFO  | 📂 Found 1 video files in Drive
+[2026-03-15 18:38:12] INFO  | ▶️ Resuming: Doraemon_S16_–_Episode_1_–_A_story_of_peeling_body_skin_jaiko_and_telugu.mp4
+[2026-03-15 18:38:12] INFO  | 🎬 Current movie: Doraemon_S16_–_Episode_1_–_A_story_of_peeling_body_skin_jaiko_and_telugu
+[2026-03-15 18:38:12] INFO  | 📌 Status: in_progress
+[2026-03-15 18:38:12] INFO  | 📥 Downloading movie from Google Drive...
+[2026-03-15 18:38:17] INFO  | 📥 Download complete! Size: 63.0 MB
+[2026-03-15 18:38:18] INFO  | 📏 Duration: 23m 4s → 23 parts
+[2026-03-15 18:38:18] INFO  | 📊 Upload progress: 0/23
+[2026-03-15 18:38:18] INFO  | 🎨 Loaded cached thumbnail background
+[2026-03-15 18:38:18] INFO  | 🔐 Login attempt 1/3 using saved session...
+[2026-03-15 18:38:26] INFO  | 🔐 Logged in via session ✅
+------------------------------------------------------------
+[2026-03-15 18:38:26] INFO  | 📦 Processing Part 1/23 — 'Doraemon_S16_–_Episode_1_–_A_story_of_peeling_body_skin_jaiko_and_telugu'
+[2026-03-15 18:38:37] INFO  | ✂️ Part 1 extracted (0s → 60s)
+[2026-03-15 18:38:37] INFO  | 🖼️ Thumbnail created: thumbnails/thumb_1.jpg
+[2026-03-15 18:38:37] INFO  | 📤 Uploading Part 1/23...
+[2026-03-15 18:38:37] INFO  |   📤 Upload attempt 1/3...
+[2026-03-15 18:39:10] INFO  | ✅ Part 1/23 uploaded!
+[2026-03-15 18:39:10] UPLOAD | Doraemon_S16_–_Episode_1_–_A_story_of_peeling_body_skin_jaiko_and_telugu | Part 1/23 | SUCCESS
