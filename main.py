@@ -95,8 +95,8 @@ class Config:
 
     # --- Gemini models to try (in order) ---
     GEMINI_MODELS = [
-        "gemini-2.0-flash-exp",
-        "gemini-2.0-flash-preview-image-generation",
+    "models/gemini-2.5-flash",
+    "models/gemini-flash-latest"
     ]
 
 
