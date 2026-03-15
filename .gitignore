@@ -1,3 +1,11 @@
 
 # Instagram session token — never commit this!
 session.json
+
+# Auth tokens + large temp files — never commit these!
+yt_token.json
+current_movie.mp4
+reels/
+thumbnails/
+tmp_frames/
+thumb_cache/
