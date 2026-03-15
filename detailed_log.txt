@@ -27,3 +27,4 @@
 [2026-03-15 16:54:18] ERROR | Fresh login failed (attempt 3): We can't find an account with animes_and.movies. Try another mobile number or email, or if you don't have an account, you can sign up.
 [2026-03-15 16:54:18] ERROR | 🔐 All login attempts failed!
 [2026-03-15 16:54:18] ERROR | Cannot login to Instagram. Stopping.
+[2026-03-15 16:54:19] INFO  | 📁 Progress pushed to GitHub
