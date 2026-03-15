@@ -4,11 +4,10 @@ on:
   schedule:
     # Every 6 hours → 4 runs/day × 3 uploads = 12 reels/day
     - cron: '0 0 * * *'     # 12:00 AM UTC
-    - cron: '0 6 * * *'     # 6:00 AM UTC
+    - cron: '0 6 * * *'     #  6:00 AM UTC
     - cron: '0 12 * * *'    # 12:00 PM UTC
-    - cron: '0 18 * * *'    # 6:00 PM UTC
-
-  # Manual trigger button
+    - cron: '0 18 * * *'    #  6:00 PM UTC
+  # Manual trigger button in GitHub Actions UI
   workflow_dispatch:
 
 # Only one upload job at a time (queue, don't cancel)
@@ -22,7 +21,7 @@ permissions:
 jobs:
   upload-reels:
     runs-on: ubuntu-latest
-    timeout-minutes: 350      # ~5.8 hours (GitHub max = 6 hours)
+    timeout-minutes: 350      # ~5.8 hours (GitHub hard max = 6 hours)
 
     steps:
       - name: 📥 Checkout repository
@@ -40,10 +39,12 @@ jobs:
         with:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            pip-
 
       - name: 🔧 Install system dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
 
       - name: 📦 Install Python dependencies
@@ -51,11 +52,11 @@ jobs:
 
       - name: 🎬 Run Auto Uploader
         env:
-          IG_USERNAME: ${{ secrets.IG_USERNAME }}
-          IG_PASSWORD: ${{ secrets.IG_PASSWORD }}
+          IG_USERNAME:      ${{ secrets.IG_USERNAME }}
+          IG_PASSWORD:      ${{ secrets.IG_PASSWORD }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
-          GDRIVE_API_KEY: ${{ secrets.GDRIVE_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GDRIVE_API_KEY:   ${{ secrets.GDRIVE_API_KEY }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
 
       - name: 💾 Final progress save
