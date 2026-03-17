@@ -5780,3 +5780,19 @@ contents.list[union[Content,str,is-instance[Image],File,Part,list[union[str,is-i
 [2026-03-17 07:11:59] INFO  | 📁 Pushing progress to GitHub...
 [2026-03-17 07:11:59] INFO  |    Staged: movies_log.json
 [2026-03-17 07:11:59] INFO  |    Staged: progress.json
+[2026-03-17 07:11:59] INFO  |    Staged: detailed_log.txt
+[2026-03-17 07:12:00] INFO  | 📁 GitHub push complete
+************************************************************
+[2026-03-17 07:12:00] INFO  | 🎉🎉🎉 'Doraemon S16 Ep.1 – A story of peeling body skin j...' FULLY UPLOADED! 🎉🎉🎉
+[2026-03-17 07:12:00] INFO  | 🧹 Cleaning up temp files...
+[2026-03-17 07:12:00] INFO  |    Deleted: current_movie.mp4
+[2026-03-17 07:12:00] INFO  |    Deleted: session.json
+[2026-03-17 07:12:00] INFO  |    Deleted: thumb_cache/thumb_bg_cc4b7e0ac739.jpg
+[2026-03-17 07:12:00] INFO  |    Deleted folder: reels
+[2026-03-17 07:12:00] INFO  |    Deleted folder: thumbnails
+[2026-03-17 07:12:00] INFO  | 🧹 Cleanup done
+[2026-03-17 07:12:00] INFO  | ⏭️  Next episode: Doraemon S16 Ep.2 – Welcome to the haunted inn
+************************************************************
+[2026-03-17 07:12:00] INFO  | 📁 Pushing progress to GitHub...
+[2026-03-17 07:12:00] INFO  |    Staged: movies_log.json
+[2026-03-17 07:12:00] INFO  |    Staged: progress.json
