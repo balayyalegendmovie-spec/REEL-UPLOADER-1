@@ -9,3 +9,7 @@ reels/
 thumbnails/
 tmp_frames/
 thumb_cache/
+
+*.mp4
+/tmp/
+detailed_log.txt
