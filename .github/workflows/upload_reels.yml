@@ -1,24 +1,24 @@
-name: 🎬 Auto Upload Reels
+name: 🎬 Auto Upload Reels (Telugu)
 
 on:
   schedule:
-    # 12 runs/day optimized for Indian audience (IST = UTC+5:30)
-    - cron: '0 1 * * *'      # IST  6:30 AM
-    - cron: '30 2 * * *'     # IST  8:00 AM
-    - cron: '0 5 * * *'      # IST 10:30 AM
-    - cron: '0 7 * * *'      # IST 12:30 PM
-    - cron: '30 8 * * *'     # IST  2:00 PM
-    - cron: '0 10 * * *'     # IST  3:30 PM
-    - cron: '30 11 * * *'    # IST  5:00 PM
-    - cron: '0 13 * * *'     # IST  6:30 PM
-    - cron: '30 14 * * *'    # IST  8:00 PM
-    - cron: '0 16 * * *'     # IST  9:30 PM
-    - cron: '30 17 * * *'    # IST 11:00 PM
-    - cron: '0 20 * * *'     # IST  1:30 AM
+    # Telugu: fires at :00 or :30 — IST peak times
+    - cron: '0 1 * * *'       # IST  6:30 AM
+    - cron: '30 2 * * *'      # IST  8:00 AM
+    - cron: '0 5 * * *'       # IST 10:30 AM
+    - cron: '0 7 * * *'       # IST 12:30 PM
+    - cron: '30 8 * * *'      # IST  2:00 PM
+    - cron: '0 10 * * *'      # IST  3:30 PM
+    - cron: '30 11 * * *'     # IST  5:00 PM
+    - cron: '0 13 * * *'      # IST  6:30 PM
+    - cron: '30 14 * * *'     # IST  8:00 PM
+    - cron: '0 16 * * *'      # IST  9:30 PM
+    - cron: '30 17 * * *'     # IST 11:00 PM
+    - cron: '0 20 * * *'      # IST  1:30 AM
   workflow_dispatch:
 
 concurrency:
-  group: reel-uploader
+  group: telugu-uploader
   cancel-in-progress: false
 
 permissions:
