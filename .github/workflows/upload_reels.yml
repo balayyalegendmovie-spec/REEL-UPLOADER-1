@@ -2,26 +2,21 @@ name: 🎬 Auto Upload Reels
 
 on:
   schedule:
-    # Every 2 hours = 12 runs/day = 12 reels/day
-    # Each run uploads exactly 1 reel then exits immediately
-    # Total runner time per reel: ~3-5 minutes (vs 2+ hours before)
-    - cron: '0 0 * * *'    #  0:00 UTC
-    - cron: '0 2 * * *'    #  2:00 UTC
-    - cron: '0 4 * * *'    #  4:00 UTC
-    - cron: '0 6 * * *'    #  6:00 UTC
-    - cron: '0 8 * * *'    #  8:00 UTC
-    - cron: '0 10 * * *'   # 10:00 UTC
-    - cron: '0 12 * * *'   # 12:00 UTC
-    - cron: '0 14 * * *'   # 14:00 UTC
-    - cron: '0 16 * * *'   # 16:00 UTC
-    - cron: '0 18 * * *'   # 18:00 UTC
-    - cron: '0 20 * * *'   # 20:00 UTC
-    - cron: '0 22 * * *'   # 22:00 UTC
-  # Manual trigger button in GitHub Actions UI
+    # 12 runs/day optimized for Indian audience (IST = UTC+5:30)
+    - cron: '0 1 * * *'      # IST  6:30 AM
+    - cron: '30 2 * * *'     # IST  8:00 AM
+    - cron: '0 5 * * *'      # IST 10:30 AM
+    - cron: '0 7 * * *'      # IST 12:30 PM
+    - cron: '30 8 * * *'     # IST  2:00 PM
+    - cron: '0 10 * * *'     # IST  3:30 PM
+    - cron: '30 11 * * *'    # IST  5:00 PM
+    - cron: '0 13 * * *'     # IST  6:30 PM
+    - cron: '30 14 * * *'    # IST  8:00 PM
+    - cron: '0 16 * * *'     # IST  9:30 PM
+    - cron: '30 17 * * *'    # IST 11:00 PM
+    - cron: '0 20 * * *'     # IST  1:30 AM
   workflow_dispatch:
 
-# Only one upload job runs at a time — no parallel runs
-# If a run is still going when next cron fires, next one waits
 concurrency:
   group: reel-uploader
   cancel-in-progress: false
@@ -30,39 +25,33 @@ permissions:
   contents: write
 
 jobs:
-  upload-reels:
+  upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 30    # Each run uploads 1 reel → done in ~5 min
-                           # 30 min timeout is a generous safety net
+    timeout-minutes: 25
 
     steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: 🐍 Setup Python 3.11
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 📦 Cache pip packages
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            pip-
 
-      - name: 🔧 Install system dependencies
+      - name: Install system deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
 
-      - name: 📦 Install Python dependencies
+      - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: 🎬 Run Auto Uploader (1 reel per run)
+      - name: Run uploader
         env:
           IG_USERNAME:      ${{ secrets.IG_USERNAME }}
           IG_PASSWORD:      ${{ secrets.IG_PASSWORD }}
@@ -70,13 +59,16 @@ jobs:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           GDRIVE_API_KEY:   ${{ secrets.GDRIVE_API_KEY }}
           GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          WATERMARK_TEXT:    ${{ secrets.WATERMARK_TEXT }}
+          CONTENT_LANGUAGE:  ${{ secrets.CONTENT_LANGUAGE }}
         run: python main.py
 
-      - name: 💾 Final progress save
+      - name: Final save
         if: always()
         run: |
-          git config user.name "Reel Bot"
+          git config user.name "ReelBot"
           git config user.email "bot@reelbot.com"
-          git add movies_log.json progress.json detailed_log.txt .gitignore || true
-          git diff --staged --quiet || git commit -m "🤖 Auto: final save"
-          git push
+          git pull --rebase || true
+          git add progress.json movies_log.json upload_history.json .gitignore 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "🤖 final save"
+          git push || true
