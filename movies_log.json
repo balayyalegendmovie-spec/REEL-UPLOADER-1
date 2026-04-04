@@ -75,7 +75,7 @@
     "1BlghJTLl8aRxQjmudzoFn1HiXMnOJr4y": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 22,
+      "parts_done": 23,
       "errors": 0,
       "started": "2026-04-02T12:10:32.650119",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 9,
-  "uploaded": 231,
-  "last_run": "2026-04-04T07:49:59.837935"
+  "uploaded": 232,
+  "last_run": "2026-04-04T09:24:41.980263"
 }
