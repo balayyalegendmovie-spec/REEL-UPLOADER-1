@@ -131,7 +131,7 @@
     "19oGeQEw5qMR9paFFGCMHY5eXTTNDlc33": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 12,
+      "parts_done": 13,
       "errors": 0,
       "started": "2026-04-17T05:19:40.859322",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 16,
-  "uploaded": 393,
-  "last_run": "2026-04-18T03:56:33.936917"
+  "uploaded": 394,
+  "last_run": "2026-04-18T05:11:12.781456"
 }
