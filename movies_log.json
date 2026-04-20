@@ -139,7 +139,7 @@
     "1fdEtYsCyEaGEQwuCjAdp1lutExFJfSnt": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 15,
+      "parts_done": 16,
       "errors": 0,
       "started": "2026-04-19T06:29:07.600256",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 17,
-  "uploaded": 421,
-  "last_run": "2026-04-20T10:32:43.856309"
+  "uploaded": 422,
+  "last_run": "2026-04-20T11:34:50.274176"
 }
