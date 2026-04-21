@@ -147,7 +147,7 @@
     "12Pw95zf9IOsr_crqSosq6qs_cYtvfDec": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 5,
+      "parts_done": 6,
       "errors": 0,
       "started": "2026-04-21T08:54:13.098567",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 18,
-  "uploaded": 436,
-  "last_run": "2026-04-21T14:55:06.084033"
+  "uploaded": 437,
+  "last_run": "2026-04-21T16:09:27.701771"
 }
