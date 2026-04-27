@@ -161,12 +161,12 @@
       "completed_at": "2026-04-25T12:14:44.491161"
     },
     "15EnggKBOvYm9P2_83TFh1xQpnDDFrqHo": {
-      "status": "in_progress",
+      "status": "completed",
       "total_parts": 24,
-      "parts_done": 23,
+      "parts_done": 24,
       "errors": 0,
       "started": "2026-04-25T14:02:11.106291",
-      "completed_at": ""
+      "completed_at": "2026-04-27T13:09:32.506169"
     },
     "1nFuYv55ygub8iXlazxE_luRbfY9IjVHi": {
       "status": "pending",
@@ -471,7 +471,7 @@
     "14MvRnA3yK9XHlZAsIWvkoKbvRxAnjigD",
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
-  "completed": 20,
-  "uploaded": 504,
-  "last_run": "2026-04-27T12:00:00.171713"
+  "completed": 21,
+  "uploaded": 505,
+  "last_run": "2026-04-27T13:09:32.506435"
 }
