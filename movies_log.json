@@ -203,7 +203,7 @@
     "1ZSjeVV-K-dCyMALrBOhNiYTbbDo1F3eV": {
       "status": "in_progress",
       "total_parts": 26,
-      "parts_done": 10,
+      "parts_done": 11,
       "errors": 0,
       "started": "2026-05-09T15:40:52.819501",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 27,
-  "uploaded": 658,
-  "last_run": "2026-05-10T11:10:59.619802"
+  "uploaded": 659,
+  "last_run": "2026-05-10T12:17:56.673419"
 }
