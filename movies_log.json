@@ -259,7 +259,7 @@
     "1JkgsQfV0EiSqyU3Al4KcTODqf2V9t_Yb": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 14,
+      "parts_done": 15,
       "errors": 0,
       "started": "2026-05-29T10:52:25.199291",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 36,
-  "uploaded": 893,
-  "last_run": "2026-05-30T10:30:22.406344"
+  "uploaded": 894,
+  "last_run": "2026-05-30T11:29:53.684745"
 }
