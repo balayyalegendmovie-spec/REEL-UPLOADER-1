@@ -323,7 +323,7 @@
     "1RbztOMlj9495NyGxr2EXZ8QrTcFH4Zq1": {
       "status": "in_progress",
       "total_parts": 26,
-      "parts_done": 23,
+      "parts_done": 24,
       "errors": 0,
       "started": "2026-06-06T13:00:39.612127",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 40,
-  "uploaded": 1001,
-  "last_run": "2026-06-08T13:00:24.779290"
+  "uploaded": 1002,
+  "last_run": "2026-06-08T14:32:00.334556"
 }
