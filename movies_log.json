@@ -363,7 +363,7 @@
     "1O8JcRmfOjlXcwxeqxP9LaALbTebojNB-": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 17,
+      "parts_done": 18,
       "errors": 0,
       "started": "2026-06-17T12:38:07.556253",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 45,
-  "uploaded": 1123,
-  "last_run": "2026-06-18T18:32:53.046263"
+  "uploaded": 1124,
+  "last_run": "2026-06-18T19:48:55.148424"
 }
