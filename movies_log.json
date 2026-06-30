@@ -411,7 +411,7 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS": {
       "status": "in_progress",
       "total_parts": 25,
-      "parts_done": 8,
+      "parts_done": 9,
       "errors": 0,
       "started": "2026-06-30T08:39:06.692229",
       "completed_at": ""
@@ -472,6 +472,6 @@
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
   "completed": 51,
-  "uploaded": 1267,
-  "last_run": "2026-06-30T17:55:08.192386"
+  "uploaded": 1268,
+  "last_run": "2026-06-30T19:25:08.121699"
 }
