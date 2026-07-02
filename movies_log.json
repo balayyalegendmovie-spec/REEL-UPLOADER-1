@@ -409,12 +409,12 @@
       "completed_at": "2026-06-30T06:52:01.751988"
     },
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS": {
-      "status": "in_progress",
+      "status": "completed",
       "total_parts": 25,
-      "parts_done": 24,
+      "parts_done": 25,
       "errors": 0,
       "started": "2026-06-30T08:39:06.692229",
-      "completed_at": ""
+      "completed_at": "2026-07-02T08:18:33.024775"
     }
   },
   "order": [
@@ -471,7 +471,7 @@
     "14MvRnA3yK9XHlZAsIWvkoKbvRxAnjigD",
     "1PPxS6LVumrafTnejl2Ab4l4sxeXM0dHS"
   ],
-  "completed": 51,
-  "uploaded": 1283,
-  "last_run": "2026-07-02T06:38:15.411000"
+  "completed": 52,
+  "uploaded": 1284,
+  "last_run": "2026-07-02T08:18:33.025067"
 }
