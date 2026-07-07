@@ -393,7 +393,7 @@ def validate_clip(path):
         )
         info = json.loads(r.stdout)
         dur = float(info.get("format", {}).get("duration", 0))
-        if dur > 60:
+        if dur > 120:
             log_err(f"Clip too long: {dur:.1f}s")
             return False
         if dur < 3:
