@@ -50,7 +50,7 @@ class C:
     WATERMARK     = os.environ.get("WATERMARK_TEXT", "")
     LANGUAGE      = os.environ.get("CONTENT_LANGUAGE", "telugu").lower()
 
-    CLIP_LEN      = 120
+    CLIP_LEN      = 119
     MAX_PER_RUN   = 1
     MAX_ERRORS    = 3
     COOLDOWN_HRS  = 24
