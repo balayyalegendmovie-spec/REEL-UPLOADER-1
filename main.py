@@ -50,7 +50,7 @@ class C:
     WATERMARK     = os.environ.get("WATERMARK_TEXT", "")
     LANGUAGE      = os.environ.get("CONTENT_LANGUAGE", "telugu").lower()
 
-    CLIP_LEN      = 59
+    CLIP_LEN      = 120
     MAX_PER_RUN   = 1
     MAX_ERRORS    = 3
     COOLDOWN_HRS  = 24
@@ -341,7 +341,7 @@ def extract_clip(video, part, total, out_path, watermark="", display_name=""):
             vf_parts.append(
                 f"drawtext=textfile='{wm_file}':fontfile='{font_esc}'"
                 f":fontsize=28:fontcolor=white@0.4"
-                f":x=w-tw-30:y=h-th-30"
+                f":x=(w-tw)/2:y=h-th-120"
                 f":shadowcolor=black@0.6:shadowx=2:shadowy=2"
             )
 
