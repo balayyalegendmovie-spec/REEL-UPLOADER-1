@@ -72,6 +72,34 @@ except ImportError:
 
 os.environ.setdefault("PYTHONUNBUFFERED", "1")
 
+# =====================================================================
+# PATCH: Fix tenacity Python 3.11+ compatibility for mega.py
+# Must patch file BEFORE importing tenacity, because import fails.
+# =====================================================================
+patched = False
+try:
+    import glob, sys
+    for site_path in sys.path:
+        for match in glob.glob(os.path.join(site_path, "tenacity/_asyncio.py")):
+            if os.path.exists(match):
+                with open(match, "r", encoding="utf-8") as f:
+                    content = f.read()
+                if "@asyncio.coroutine" in content:
+                    content = content.replace("@asyncio.coroutine", "# @asyncio.coroutine")
+                    with open(match, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    patched = True
+                    # Log via print (log function not defined yet) — will confirm after
+                    print(f"[PATCH] Fixed tenacity at {match} for Python 3.11+")
+except Exception as exc:
+    print(f"[PATCH] Warning: could not patch tenacity: {exc}")
+
+# Now safe to import tenacity / mega after patch
+try:
+    import tenacity
+except Exception:
+    pass
+
 
 # =====================================================================
 # CONFIG
