@@ -1237,8 +1237,8 @@ def main() -> None:
     if progress.check_cooldown(tracker):
         return
 
-    # Smart delay (anti-detect)
-    smart_delay()
+    # Smart delay (anti-detect) — DISABLED FOR TESTING; will restore after confirmation
+    # smart_delay()
 
     # Source module: read user-curated file (simulating spreadsheet)
     source_provider = SpreadsheetSource()
