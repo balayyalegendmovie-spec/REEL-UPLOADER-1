@@ -437,7 +437,7 @@
       "status": "pending",
       "total_parts": 0,
       "parts_done": 0,
-      "errors": 1,
+      "errors": 2,
       "started": "",
       "completed_at": "",
       "movie_title": "pc9HDZaT#bFci8FdTsVCDpOSay3PZCGV8XFjLU4Eta_EPrlHjcoE",
@@ -473,5 +473,5 @@
   ],
   "completed": 54,
   "uploaded": 1394,
-  "last_run": "2026-07-19T13:08:36.817699"
+  "last_run": "2026-07-19T13:25:00.634878"
 }
