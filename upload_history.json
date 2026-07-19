@@ -435,5 +435,13 @@
       "hour": 13,
       "delay": 2
     }
+  ],
+  "uploaded": [
+    {
+      "slug": "pc9HDZaT#bFci8FdTsVCDpOSay3PZCGV8XFjLU4Eta_EPrlHjcoE",
+      "part": 1,
+      "title": "movie",
+      "time": "2026-07-19T14:44:46.141234"
+    }
   ]
 }
