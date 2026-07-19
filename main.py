@@ -289,7 +289,15 @@ class SourceProvider:
         raise NotImplementedError
 
     def filter_new_movies(self, movies: List[MovieItem], history: Dict[str, Any]) -> List[MovieItem]:
-        uploaded_slugs = set(history.get("uploaded", []))
+        uploaded_items = history.get("uploaded", [])
+        uploaded_slugs = set()
+        for item in uploaded_items:
+            if isinstance(item, dict):
+                sid = item.get("slug", "")
+                if sid:
+                    uploaded_slugs.add(str(sid))
+            else:
+                uploaded_slugs.add(str(item))
         processed_slugs = set()
         # Also check movies_log.json for completed movie IDs/slugs
         log_data = load_json(C.LOG_FILE, {"videos": {}, "order": []})
