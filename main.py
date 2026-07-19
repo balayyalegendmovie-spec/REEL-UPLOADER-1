@@ -83,7 +83,7 @@ class C:
     IG_SESSION = os.environ.get("IG_SESSION", "")
 
     # Source configuration
-    SOURCE_FILE = os.environ.get("SOURCE_FILE", "source_movies.csv")  # CSV: slug,url,title,quality
+    SOURCE_FILE = os.environ.get("SOURCE_FILE", "sources.txt")  # Line-based URLs; add ✅ when done
     SOURCE_JSON = os.environ.get("SOURCE_JSON", "source_movies.json")  # Fallback JSON list
 
     # Drive / external keys (optional, preserved from original)
@@ -350,6 +350,34 @@ class SpreadsheetSource(SourceProvider):
             download_source_from_drive()
         log_step(1, 9, "Scan source file")
         movies: List[MovieItem] = []
+        # If using line-based sources.txt (URL only; add ✅ when done)
+        if self.file_path.endswith(".txt"):
+            try:
+                if os.path.exists(self.file_path):
+                    with open(self.file_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            # Skip completed URLs
+                            if line.endswith("✅"):
+                                continue
+                            url = line.split()[0] if line.split() else line
+                            slug = url.split("/")[-1].split("?")[0] if url else f"movie_{len(movies)+1}"
+                            if url:
+                                movies.append(MovieItem(
+                                    slug=slug,
+                                    url=url,
+                                    title=slug,
+                                    quality="1080p",
+                                ))
+            except Exception as exc:
+                log_warn(f"Failed to read text source: {exc}")
+            log(f"Source loaded: {len(movies)} entries from {self.file_path}")
+            for m in movies:
+                log(f"  {m.slug} | {m.quality} | {m.url}")
+            return movies
+        # Otherwise fall back to CSV / JSON
         # Try CSV first (with or without headers; supports URL-only format)
         if os.path.exists(self.file_path):
             try:
@@ -1415,6 +1443,8 @@ def main() -> None:
                 log("🎉🎉🎉 EPISODE FULLY UPLOADED! 🎉🎉🎉")
                 video_info["status"] = "completed"
                 video_info["completed_at"] = datetime.now().isoformat()
+                # Mark URL as completed in sources.txt
+                mark_source_done(selected_movie.url)
                 current_progress = {
                     "movie_slug": "", "movie_title": "", "movie_url": "",
                     "part": 0, "total": 0, "thumb_time": -1, "cooldown_until": "", "started_at": ""
@@ -1449,6 +1479,25 @@ def main() -> None:
     print("\n" + "=" * 50, flush=True)
     print(f"📊 Episodes completed: {log_data.get('completed', 0)}/{len(log_data.get('videos', {}))} | Reels uploaded this movie: {video_info.get('parts_done', 0)}/{video_info.get('total_parts', 0)}", flush=True)
     print("=" * 50, flush=True)
+
+
+def mark_source_done(url: str) -> None:
+    """Add ✅ to the URL line in sources.txt after successful upload."""
+    if not os.path.exists(C.SOURCE_FILE):
+        return
+    try:
+        with open(C.SOURCE_FILE, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines(keepends=True)
+        with open(C.SOURCE_FILE, "w", encoding="utf-8") as f:
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith(url) and not stripped.endswith("✅"):
+                    f.write(stripped + " ✅\n")
+                    log(f"Marked completed in source file: {stripped[:50]}...")
+                else:
+                    f.write(line if line.endswith("\n") else line + "\n")
+    except Exception as exc:
+        log_warn(f"Failed to mark source file: {exc}")
 
 
 # GROWTH NOTE (after authorization confirmed):
