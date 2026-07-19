@@ -320,6 +320,18 @@ def download_source_from_drive():
         return False
 
 
+def extract_title_from_path(path: str) -> str:
+    """Derive a clean display title from the downloaded file name (no HTML scraping)."""
+    name = os.path.basename(path)
+    # Remove common extensions and resolution tags for cleaner display
+    clean = re.sub(r"\.(mp4|mkv|avi|mov|webm)$", "", name, flags=re.IGNORECASE)
+    clean = re.sub(r"\[\d+p\]", "", clean)
+    clean = re.sub(r"\[Multi-Audio\]", "", clean)
+    clean = clean.replace("_", " ").replace("-", " ")
+    clean = re.sub(r"\s+", " ", clean).strip()
+    return clean[:60] if clean else name
+
+
 class SpreadsheetSource(SourceProvider):
     """
     Reads user-curated source file.
@@ -338,20 +350,34 @@ class SpreadsheetSource(SourceProvider):
             download_source_from_drive()
         log_step(1, 9, "Scan source file")
         movies: List[MovieItem] = []
-        # Try CSV first
+        # Try CSV first (with or without headers; supports URL-only format)
         if os.path.exists(self.file_path):
             try:
                 with open(self.file_path, newline="", encoding="utf-8") as f:
-                    reader = csv.DictReader(f)
+                    sample = f.read(512)
+                    f.seek(0)
+                    # Detect if first line is a header or just a URL
+                    first_line = sample.splitlines()[0] if sample else ""
+                    has_header = bool(re.search(r"slug|url|title|quality|download", first_line, re.IGNORECASE))
+                    reader = csv.reader(f) if not has_header else csv.DictReader(f)
                     for row in reader:
-                        slug = (row.get("slug") or row.get("id") or "").strip()
-                        url = (row.get("url") or row.get("download_url") or row.get("link") or "").strip()
-                        if slug and url:
+                        if has_header:
+                            url = (row.get("url") or row.get("download_url") or row.get("link") or "").strip()
+                            slug = (row.get("slug") or row.get("id") or "").strip()
+                            title = row.get("title", "").strip() if row.get("title") else ""
+                            quality = row.get("quality", row.get("resolution", "1080p")).strip()
+                        else:
+                            # URL-only format: first cell is URL
+                            url = (row[0] if len(row) > 0 else "").strip()
+                            slug = url.split("/")[-1].split("?")[0] if url else f"movie_{len(movies)+1}"
+                            title = ""
+                            quality = "1080p"
+                        if url:
                             movies.append(MovieItem(
                                 slug=slug,
                                 url=url,
-                                title=row.get("title", "").strip() or slug,
-                                quality=row.get("quality", row.get("resolution", "unknown")).strip(),
+                                title=title or slug,
+                                quality=quality,
                             ))
             except Exception as exc:
                 log_warn(f"Failed to read CSV source: {exc}")
@@ -1186,6 +1212,11 @@ def main() -> None:
     # Actually, for audio selection we may need a separate raw file.
     # Let's download to MOVIE_FILE; audio selector can read from it and produce MOVIE_FILE (overwrite with remuxed version).
     download_success = download_manager.download(selected_movie, C.MOVIE_FILE)
+    # If CSV had no title, derive it from the downloaded file name (safe, no scraping)
+    if download_success and (not selected_movie.title or selected_movie.title == selected_movie.slug):
+        derived_title = extract_title_from_path(C.MOVIE_FILE)
+        selected_movie.title = derived_title
+        log(f"Title derived from file: {derived_title}")
     if not download_success:
         info = log_data.get("videos", {}).get(selected_movie.slug, {})
         info["errors"] = info.get("errors", 0) + 1
