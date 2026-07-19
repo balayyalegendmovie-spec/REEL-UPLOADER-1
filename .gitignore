@@ -13,3 +13,6 @@ thumb_cache/
 *.mp4
 /tmp/
 detailed_log.txt
+
+uploads/
+.env
