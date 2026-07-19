@@ -793,8 +793,8 @@ class ThumbnailGenerator:
             )
             thumb = Image.alpha_composite(thumb, box_overlay).convert("RGB")
             draw = ImageDraw.Draw(thumb)
-        font_label = self.get_font(44)  # Larger for scroll-stopping
-        font_num = self.get_font(100)  # Much larger, modern style
+            font_label = self.get_font(44)  # Larger for scroll-stopping
+            font_num = self.get_font(100)  # Much larger, modern style
             label = "PART"
             if font_label:
                 bb_l = draw.textbbox((0, 0), label, font=font_label)
