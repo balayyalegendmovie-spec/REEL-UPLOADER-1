@@ -520,8 +520,10 @@ class DownloadManager:
                 # Use mega.py for Mega URLs
                 if is_mega and mega_downloader is not None:
                     try:
-                        # Try anonymous or default download
-                        mega_downloader.download_url(url, out_path, None)
+                        # Try anonymous or default download; pass directory + filename separately
+                        target_dir = os.path.dirname(out_path) or "."
+                        target_name = os.path.basename(out_path) or "movie.mp4"
+                        mega_downloader.download_url(url, target_dir, target_name)
                         if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
                             log(f"Mega download complete: {os.path.getsize(out_path) / 1024 / 1024:.1f} MB")
                             return self._verify_video(out_path, item)
