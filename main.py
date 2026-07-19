@@ -477,8 +477,31 @@ class DownloadManager:
                 log(f"Resuming download from byte {resume_size}")
 
         max_retries = 3
+        # Try Mega library for mega.nz URLs
+        is_mega = "mega.nz" in url.lower()
+        mega_downloader = None
+        if is_mega:
+            try:
+                from mega import Mega
+                mega_downloader = Mega()
+                log("Mega URL detected — using mega.py downloader")
+            except ImportError:
+                log_warn("mega.py not installed; falling back to generic download (may fail for Mega links)")
         for attempt in range(1, max_retries + 1):
             try:
+                # Use mega.py for Mega URLs
+                if is_mega and mega_downloader is not None:
+                    try:
+                        # Try anonymous or default download
+                        mega_downloader.download_url(url, out_path, None)
+                        if os.path.exists(out_path) and os.path.getsize(out_path) > 10000:
+                            log(f"Mega download complete: {os.path.getsize(out_path) / 1024 / 1024:.1f} MB")
+                            return self._verify_video(out_path, item)
+                        else:
+                            log_warn("Mega download produced empty file — falling back to requests")
+                    except Exception as mega_exc:
+                        log_warn(f"Mega download failed: {mega_exc} — falling back to requests")
+                # Generic download for non-Mega URLs (or Mega fallback)
                 with requests.get(url, headers=headers, stream=True, timeout=300) as r:
                     r.raise_for_status()
                     total_size_str = r.headers.get("content-length", "0")
