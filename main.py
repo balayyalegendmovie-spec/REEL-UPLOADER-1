@@ -362,8 +362,20 @@ class SpreadsheetSource(SourceProvider):
                     reader = csv.reader(f) if not has_header else csv.DictReader(f)
                     for row in reader:
                         if has_header:
-                            url = (row.get("url") or row.get("download_url") or row.get("link") or "").strip()
-                            slug = (row.get("slug") or row.get("id") or "").strip()
+                            # Detect any URL-like column name
+                            url_col = None
+                            for k in row.keys():
+                                if k and ("url" in k.lower() or "link" in k.lower() or "movie" in k.lower()):
+                                    url_col = k
+                                    break
+                            url = (row.get(url_col) if url_col else row.get("url") or row.get("download_url") or row.get("link") or "").strip()
+                            slug_col = None
+                            for k in row.keys():
+                                if k and ("slug" in k.lower() or "id" in k.lower() or "name" in k.lower() or "movie" in k.lower()):
+                                    slug_col = k
+                                    break
+                            slug = (row.get(slug_col) if slug_col else row.get("slug") or row.get("id") or "").strip()
+                            # Derive title and quality from URL/file if not present
                             title = row.get("title", "").strip() if row.get("title") else ""
                             quality = row.get("quality", row.get("resolution", "1080p")).strip()
                         else:
