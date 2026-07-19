@@ -2,7 +2,7 @@ name: 🎬 Auto Upload Reels (Telugu)
 
 on:
   schedule:
-    # Telugu: fires at :00 or :30 — IST peak times
+    # Telugu: fires at :00 or :30 — IST peak times for maximum reach
     - cron: '0 1 * * *'       # IST  6:30 AM
     - cron: '30 2 * * *'      # IST  8:00 AM
     - cron: '0 5 * * *'       # IST 10:30 AM
@@ -28,7 +28,6 @@ jobs:
   upload:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,7 +50,7 @@ jobs:
       - name: Install Python deps
         run: pip install -r requirements.txt
 
-      - name: Run uploader
+      - name: Run uploader (optimized for max reach)
         env:
           IG_USERNAME:      ${{ secrets.IG_USERNAME }}
           IG_PASSWORD:      ${{ secrets.IG_PASSWORD }}
@@ -61,6 +60,7 @@ jobs:
           GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
           WATERMARK_TEXT:    ${{ secrets.WATERMARK_TEXT }}
           CONTENT_LANGUAGE:  ${{ secrets.CONTENT_LANGUAGE }}
+          CLIP_LEN:          "95"
         run: python main.py
 
       - name: Final save
