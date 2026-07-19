@@ -643,9 +643,10 @@ class AudioSelector:
 
             # Remux: video from original + selected audio stream
             # Use stream copy to avoid re-encoding
+            # Note: best_index is the GLOBAL stream index from ffprobe, so map by global index directly
             subprocess.run(
                 ["ffmpeg", "-y", "-i", raw_path,
-                 "-map", "0:v:0", "-map", f"0:a:{best_index}",
+                 "-map", "0:v:0", "-map", f"0:{best_index}",
                  "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                  "-movflags", "+faststart", out_path],
                 capture_output=True, timeout=300
@@ -1297,6 +1298,15 @@ def main() -> None:
     else:
         selected_movie = new_movies[0]
         log(f"Selected new movie: {selected_movie.title} ({selected_movie.slug})")
+
+    # Clean up any previous incorrect download / old Hindi movie file
+    for cleanup_path in [C.MOVIE_FILE, C.MOVIE_RAW, C.MOVIE_FILE + ".partial", C.MOVIE_RAW + ".partial"]:
+        if os.path.exists(cleanup_path):
+            try:
+                os.remove(cleanup_path)
+                log(f"Removed old/incorrect file: {cleanup_path}")
+            except Exception:
+                pass
 
     # Download
     download_manager = DownloadManager()
