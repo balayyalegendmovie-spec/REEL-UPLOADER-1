@@ -1307,8 +1307,9 @@ def main() -> None:
         selected_movie = new_movies[0]
         log(f"Selected new movie: {selected_movie.title} ({selected_movie.slug})")
 
-    # Clean up any previous incorrect download / old Hindi movie file
-    for cleanup_path in [C.MOVIE_FILE, C.MOVIE_RAW, C.MOVIE_FILE + ".partial", C.MOVIE_RAW + ".partial"]:
+    # Clean up any previous incorrect download / old Hindi movie file / previous remux
+    for cleanup_path in [C.MOVIE_FILE, C.MOVIE_RAW, C.MOVIE_AUDIO_FIXED,
+                         C.MOVIE_FILE + ".partial", C.MOVIE_RAW + ".partial", C.MOVIE_AUDIO_FIXED + ".partial"]:
         if os.path.exists(cleanup_path):
             try:
                 os.remove(cleanup_path)
@@ -1318,10 +1319,6 @@ def main() -> None:
 
     # Download
     download_manager = DownloadManager()
-    # We download to MOVIE_FILE directly (or MOVIE_RAW then remux to MOVIE_FILE)
-    # To preserve original behavior, we'll download to MOVIE_FILE directly.
-    # Actually, for audio selection we may need a separate raw file.
-    # Let's download to MOVIE_FILE; audio selector can read from it and produce MOVIE_FILE (overwrite with remuxed version).
     download_success = download_manager.download(selected_movie, C.MOVIE_FILE)
     # If CSV had no title, derive it from the downloaded file name (safe, no scraping)
     if download_success and (not selected_movie.title or selected_movie.title == selected_movie.slug):
@@ -1338,15 +1335,19 @@ def main() -> None:
         return
 
     log_step(5, 9, "Analyze video and select audio")
-    video_path = C.MOVIE_FILE
-    # Audio selection / remux
+    raw_video_path = C.MOVIE_FILE
+    # Audio selection / remux to a NEW file (not same file) so Telugu audio is preserved correctly
+    remux_target = C.MOVIE_AUDIO_FIXED
     audio_selector = AudioSelector()
-    # We'll remux in-place (overwrite MOVIE_FILE with Telugu audio version)
-    remux_ok = audio_selector.select_and_remux(video_path, C.MOVIE_FILE)
-    if not remux_ok:
-        log_warn("Audio remux failed — continuing with original file")
+    remux_ok = audio_selector.select_and_remux(raw_video_path, remux_target)
+    # Use the remuxed Telugu file if successful; otherwise fall back to original
+    video_path = remux_target if remux_ok else raw_video_path
+    if remux_ok:
+        log(f"Using Telugu remuxed video: {video_path}")
+    else:
+        log_warn(f"Audio remux failed — continuing with original file: {video_path}")
 
-    duration = VideoProcessor().get_duration(C.MOVIE_FILE)
+    duration = VideoProcessor().get_duration(video_path)
     if duration <= 0:
         info = log_data.get("videos", {}).get(selected_movie.slug, {})
         info["status"] = "error"
@@ -1425,13 +1426,13 @@ def main() -> None:
     thumb_generator = ThumbnailGenerator()
     if current_progress.get("thumb_time", -1) < 0 or not os.path.exists(C.THUMBS_DIR):
         os.makedirs(C.FRAMES_DIR, exist_ok=True)
-        bg_frame, thumb_time = thumb_generator.select_best_frame(C.MOVIE_FILE, duration)
+        bg_frame, thumb_time = thumb_generator.select_best_frame(video_path, duration)
         current_progress["thumb_time"] = thumb_time
         progress.save_progress(current_progress)
     else:
         thumb_time = current_progress["thumb_time"]
         jpg = os.path.join(C.THUMBS_DIR, "bg.jpg")
-        bg_frame = thumb_generator.extract_frame(C.MOVIE_FILE, thumb_time, jpg)
+        bg_frame = thumb_generator.extract_frame(video_path, thumb_time, jpg)
         log(f"Reusing saved frame at t={thumb_time:.1f}s")
 
     # Instagram setup
@@ -1460,7 +1461,7 @@ def main() -> None:
         clip_path = os.path.join(C.CLIPS_DIR, f"part_{p}.mp4")
         thumb_path = os.path.join(C.THUMBS_DIR, f"thumb_{p}.jpg")
         # Extract clip
-        if not video_proc.extract_clip(C.MOVIE_FILE, p, total, clip_path, C.WATERMARK, selected_movie.title):
+        if not video_proc.extract_clip(video_path, p, total, clip_path, C.WATERMARK, selected_movie.title):
             video_info["errors"] = video_info.get("errors", 0) + 1
             if video_info.get("errors", 0) >= C.MAX_ERRORS:
                 video_info["status"] = "error"
