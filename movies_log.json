@@ -436,7 +436,7 @@
       "slug": "pc9HDZaT#bFci8FdTsVCDpOSay3PZCGV8XFjLU4Eta_EPrlHjcoE",
       "status": "in_progress",
       "total_parts": 58,
-      "parts_done": 27,
+      "parts_done": 28,
       "errors": 0,
       "started": "2026-07-19T14:41:54.807988",
       "completed_at": "",
@@ -472,6 +472,6 @@
     "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc"
   ],
   "completed": 54,
-  "uploaded": 1421,
-  "last_run": "2026-07-21T19:05:19.614493"
+  "uploaded": 1422,
+  "last_run": "2026-07-21T21:13:34.244780"
 }
