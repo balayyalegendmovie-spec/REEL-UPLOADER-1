@@ -1,16 +1,6 @@
 {
   "uploads": [
     {
-      "time": "2026-07-18T18:13:45.688846",
-      "hour": 18,
-      "delay": 13
-    },
-    {
-      "time": "2026-07-18T20:40:03.848902",
-      "hour": 20,
-      "delay": 6
-    },
-    {
       "time": "2026-07-19T04:17:22.877430",
       "hour": 4,
       "delay": 3
@@ -414,6 +404,11 @@
       "time": "2026-07-25T18:13:15.669556",
       "hour": 18,
       "delay": 9
+    },
+    {
+      "time": "2026-07-25T20:43:02.509520",
+      "hour": 20,
+      "delay": 12
     }
   ],
   "uploaded": [
@@ -794,6 +789,12 @@
       "part": 5,
       "title": "movie",
       "time": "2026-07-25T18:31:56.400407"
+    },
+    {
+      "slug": "dBN1CQDT#yP0WeoeopKQ9xbjwzOmXYeAgeP0oK8EWDAdQAfEiKAw",
+      "part": 6,
+      "title": "movie",
+      "time": "2026-07-25T21:03:43.446431"
     }
   ]
 }
