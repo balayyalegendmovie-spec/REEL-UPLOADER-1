@@ -456,10 +456,10 @@
     },
     "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc": {
       "slug": "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc",
-      "status": "in_progress",
+      "status": "pending",
       "total_parts": 69,
       "parts_done": 20,
-      "errors": 0,
+      "errors": 1,
       "started": "2026-07-31T21:15:02.545330",
       "completed_at": "",
       "movie_title": "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc",
@@ -473,5 +473,5 @@
   ],
   "completed": 56,
   "uploaded": 1534,
-  "last_run": "2026-08-02T12:55:23.302132"
+  "last_run": "2026-08-02T14:35:24.392966"
 }
