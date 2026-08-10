@@ -456,12 +456,12 @@
     },
     "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc": {
       "slug": "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc",
-      "status": "in_progress",
+      "status": "completed",
       "total_parts": 69,
-      "parts_done": 68,
+      "parts_done": 69,
       "errors": 0,
       "started": "2026-08-10T06:29:31.751324",
-      "completed_at": "",
+      "completed_at": "2026-08-10T14:33:22.472294",
       "movie_title": "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc",
       "movie_url": "https://mega.nz/file/nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc"
     }
@@ -471,7 +471,7 @@
     "dBN1CQDT#yP0WeoeopKQ9xbjwzOmXYeAgeP0oK8EWDAdQAfEiKAw",
     "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc"
   ],
-  "completed": 56,
-  "uploaded": 1582,
-  "last_run": "2026-08-10T12:24:07.990169"
+  "completed": 57,
+  "uploaded": 1583,
+  "last_run": "2026-08-10T14:33:22.472627"
 }

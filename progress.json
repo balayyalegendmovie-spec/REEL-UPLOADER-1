@@ -1,10 +1,10 @@
 {
-  "movie_slug": "nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc",
-  "movie_title": "movie",
-  "movie_url": "https://mega.nz/file/nUZQ1IxT#7O5WnHGiZptpdmLO2_faYv63b5BR-K0GZrwbs0SDxfc",
-  "part": 68,
-  "total": 69,
-  "thumb_time": 2749.4653200000002,
-  "cooldown_until": "2026-08-09T09:31:48.707172",
-  "started_at": "2026-07-31T13:33:55.186924"
+  "movie_slug": "",
+  "movie_title": "",
+  "movie_url": "",
+  "part": 0,
+  "total": 0,
+  "thumb_time": -1,
+  "cooldown_until": "",
+  "started_at": ""
 }
